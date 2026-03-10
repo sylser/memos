@@ -139,7 +139,7 @@ const MapControls = ({ position }: MapControlsProps) => {
 
   const handleOpenInGoogleMaps = () => {
     if (!position) return;
-    const url = `https://www.google.com/maps?q=${position.lat},${position.lng}`;
+    const url = `https://uri.amap.com/marker?position=${position.lng},${position.lat}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
