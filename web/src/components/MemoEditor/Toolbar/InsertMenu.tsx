@@ -15,7 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useDebounce } from "react-use";
 import { LinkMemoDialog, LocationDialog } from "@/components/MemoMetadata";
-import { useReverseGeocoding } from "@/components/map";
+import { useIPGeocoding, useReverseGeocoding } from "@/components/map";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -74,6 +74,10 @@ const InsertMenu = (props: InsertMenuProps) => {
     setPlaceholder,
   } = location;
 
+  // 使用 IP 定位
+
+  const { data: ipLocation } = useIPGeocoding();
+
   const [debouncedPosition, setDebouncedPosition] = useState<LatLng | undefined>(undefined);
 
   useDebounce(
@@ -85,6 +89,13 @@ const InsertMenu = (props: InsertMenuProps) => {
   );
 
   const { data: displayName } = useReverseGeocoding(debouncedPosition?.lat, debouncedPosition?.lng);
+
+  // 当 IP 定位数据返回时，设置占位符
+  useEffect(() => {
+    if (ipLocation?.address) {
+      setPlaceholder(ipLocation.address);
+    }
+  }, [ipLocation, setPlaceholder]);
 
   useEffect(() => {
     if (displayName) {
@@ -101,18 +112,22 @@ const InsertMenu = (props: InsertMenuProps) => {
   const handleLocationClick = useCallback(() => {
     setLocationDialogOpen(true);
     if (!initialLocation && !locationInitialized) {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            handleLocationPositionChange(new LatLng(position.coords.latitude, position.coords.longitude));
-          },
-          (error) => {
-            console.error("Geolocation error:", error);
-          },
-        );
+      // 使用 IP 定位数据
+      if (ipLocation) {
+        // 从 IP 定位结果中获取大致坐标（如果有）
+        // 注意：高德 IP 定位返回的是矩形区域，我们可以取中心点
+        if (ipLocation.rectangle) {
+          console.log(ipLocation.rectangle,"ipLocation.rectangle")
+          const [leftBottom, rightTop] = ipLocation.rectangle.split(";");
+          const [lng1, lat1] = leftBottom.split(",").map(Number);
+          const [lng2, lat2] = rightTop.split(",").map(Number);
+          const centerLng = (lng1 + lng2) / 2;
+          const centerLat = (lat1 + lat2) / 2;
+          handleLocationPositionChange(new LatLng(centerLat, centerLng));
+        }
       }
     }
-  }, [initialLocation, locationInitialized, handleLocationPositionChange]);
+  }, [initialLocation, locationInitialized, handleLocationPositionChange, ipLocation]);
 
   const handleLocationConfirm = useCallback(() => {
     const newLocation = getLocation();
