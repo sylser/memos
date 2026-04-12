@@ -29,3 +29,4 @@ dist
 .worktrees/
 
 *-lock*
+.workbuddy
