@@ -1,0 +1,30 @@
+networks:
+  1panel-network:
+    external: true
+services:
+  memos:
+    command: []
+    container_name: ${CONTAINER_NAME}
+    deploy:
+      resources:
+        limits:
+          cpus: ${CPUS}
+          memory: ${MEMORY_LIMIT}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - apk add --no-cache ffmpeg; pkill memos || true; if [ -f /app/memos ]; then cp /app/memos /usr/local/memos/memos && chmod +x /usr/local/memos/memos; fi; exec /usr/local/memos/entrypoint.sh /usr/local/memos/memos
+    environment:
+      - TZ=${TIME_ZONE:-Asia/Shanghai}
+      - UMASK=022
+    image: neosmemo/memos:0.26.2
+    labels:
+      createdBy: Apps
+    networks:
+      - 1panel-network
+    ports:
+      - ${HOST_IP}:${PANEL_APP_PORT_HTTP}:5230
+    restart: on-failure:5
+    volumes:
+      - ./memos:/var/opt/memos:z
+      - ./app:/app:z

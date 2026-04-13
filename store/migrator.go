@@ -111,13 +111,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return errors.Wrap(err, "failed to get current schema version")
 	}
 	// Check for downgrade (but skip if schema version is empty - that means fresh/old installation)
-	if !isVersionEmpty(instanceBasicSetting.SchemaVersion) && version.IsVersionGreaterThan(instanceBasicSetting.SchemaVersion, currentSchemaVersion) {
-		slog.Error("cannot downgrade schema version",
-			slog.String("databaseVersion", instanceBasicSetting.SchemaVersion),
-			slog.String("currentVersion", currentSchemaVersion),
-		)
-		return errors.Errorf("cannot downgrade schema version from %s to %s", instanceBasicSetting.SchemaVersion, currentSchemaVersion)
-	}
+	//if !isVersionEmpty(instanceBasicSetting.SchemaVersion) && version.IsVersionGreaterThan(instanceBasicSetting.SchemaVersion, currentSchemaVersion) {
+	//	slog.Error("cannot downgrade schema version",
+	//		slog.String("databaseVersion", instanceBasicSetting.SchemaVersion),
+	//		slog.String("currentVersion", currentSchemaVersion),
+	//	)
+	//	return errors.Errorf("cannot downgrade schema version from %s to %s", instanceBasicSetting.SchemaVersion, currentSchemaVersion)
+	//}
 	// Apply migrations if needed.
 	if isVersionEmpty(instanceBasicSetting.SchemaVersion) || version.IsVersionGreaterThan(currentSchemaVersion, instanceBasicSetting.SchemaVersion) {
 		if err := s.applyMigrations(ctx, instanceBasicSetting.SchemaVersion, currentSchemaVersion); err != nil {
