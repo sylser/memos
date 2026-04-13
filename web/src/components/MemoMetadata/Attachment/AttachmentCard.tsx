@@ -1,3 +1,4 @@
+import VideoJSPlayer from "@/components/VideoJSPlayer";
 import { cn } from "@/lib/utils";
 import type { Attachment } from "@/types/proto/api/v1/attachment_service_pb";
 import { getAttachmentThumbnailUrl, getAttachmentType, getAttachmentUrl } from "@/utils/attachment";
@@ -32,7 +33,7 @@ const AttachmentCard = ({ attachment, onClick, className }: AttachmentCardProps)
   }
 
   if (attachmentType === "video/*") {
-    return <video src={sourceUrl} className={cn("w-full h-full object-cover rounded-lg", className)} controls preload="metadata" />;
+    return <VideoJSPlayer src={sourceUrl} className={cn("h-full", className)} videoClassName="h-full w-full object-cover rounded-lg" />;
   }
 
   if (attachmentType === "audio/*") {

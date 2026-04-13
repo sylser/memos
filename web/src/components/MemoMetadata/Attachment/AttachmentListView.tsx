@@ -1,8 +1,9 @@
-import { DownloadIcon, FileIcon, PaperclipIcon, PlayIcon } from "lucide-react";
+import { DownloadIcon, FileIcon, PaperclipIcon } from "lucide-react";
 import type { PropsWithChildren } from "react";
 import { useMemo } from "react";
 import MetadataSection from "@/components/MemoMetadata/MetadataSection";
 import MotionPhotoPreview from "@/components/MotionPhotoPreview";
+import VideoJSPlayer from "@/components/VideoJSPlayer";
 import { cn } from "@/lib/utils";
 import type { Attachment } from "@/types/proto/api/v1/attachment_service_pb";
 import { getAttachmentUrl } from "@/utils/attachment";
@@ -11,7 +12,6 @@ import { buildAttachmentVisualItems } from "@/utils/media-item";
 import AudioAttachmentItem from "./AudioAttachmentItem";
 import { getAttachmentMetadata, isAudioAttachment, separateAttachments } from "./attachmentHelpers";
 import {
-  COLLAGE_VIDEO_PLAY_BADGE_CLASS,
   COVER_MEDIA_CLASS,
   MEDIA_HOVER_GRADIENT_CLASS,
   MEDIA_HOVER_SURFACE_CLASS,
@@ -87,17 +87,6 @@ const VisualTile = ({
   );
 };
 
-const VideoPlayBadge = ({ className, children }: PropsWithChildren<{ className?: string }>) => (
-  <span
-    className={cn(
-      "pointer-events-none absolute inline-flex items-center justify-center rounded-full bg-background/85 text-foreground shadow-sm backdrop-blur-sm",
-      className,
-    )}
-  >
-    {children}
-  </span>
-);
-
 const CollageVisualItem = ({
   item,
   onPreview,
@@ -110,19 +99,17 @@ const CollageVisualItem = ({
   overlayLabel?: string;
 }) => {
   const motionPreviewProps = item.kind === "motion" ? getMotionPreviewProps(item) : undefined;
+  if (item.kind === "video") {
+    return (
+      <div className={cn("block h-full w-full overflow-hidden rounded-xl bg-black/5", className)}>
+        <VideoJSPlayer src={item.sourceUrl} className="h-full w-full" videoClassName={COVER_MEDIA_CLASS} controls />
+      </div>
+    );
+  }
 
   return (
     <VisualTile className={cn("block h-full w-full", className)} onPreview={onPreview} overlayLabel={overlayLabel}>
-      {item.kind === "video" ? (
-        <>
-          <video src={item.sourceUrl} className={COVER_MEDIA_CLASS} preload="metadata" />
-          {!overlayLabel && (
-            <VideoPlayBadge className={COLLAGE_VIDEO_PLAY_BADGE_CLASS}>
-              <PlayIcon className="h-3.5 w-3.5 fill-current" />
-            </VideoPlayBadge>
-          )}
-        </>
-      ) : item.kind === "motion" && motionPreviewProps ? (
+      {item.kind === "motion" && motionPreviewProps ? (
         <MotionPhotoPreview
           posterUrl={item.posterUrl}
           motionUrl={motionPreviewProps.motionUrl}
@@ -168,15 +155,11 @@ const SingleVisualItem = ({ item, onPreview }: { item: VisualItem; onPreview?: (
   }
 
   return (
-    <VisualTile className={cn("block", SINGLE_VIDEO_CARD_WIDTH_CLASS)} onPreview={onPreview}>
+    <div className={cn("block overflow-hidden rounded-xl", SINGLE_VIDEO_CARD_WIDTH_CLASS)}>
       <div className="relative aspect-video bg-black/5">
-        <video src={item.sourceUrl} poster={item.posterUrl} className={COVER_MEDIA_CLASS} preload="metadata" />
-        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-black/5 to-transparent" />
-        <VideoPlayBadge className="bottom-3 right-3 h-9 w-9">
-          <PlayIcon className="h-4 w-4 fill-current" />
-        </VideoPlayBadge>
+        <VideoJSPlayer src={item.sourceUrl} className="h-full w-full" videoClassName={COVER_MEDIA_CLASS} controls />
       </div>
-    </VisualTile>
+    </div>
   );
 };
 
