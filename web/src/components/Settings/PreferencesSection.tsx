@@ -1,4 +1,5 @@
 import { create } from "@bufbuild/protobuf";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
 import { useUpdateUserGeneralSetting } from "@/hooks/useUserQueries";
@@ -13,6 +14,9 @@ import VisibilityIcon from "../VisibilityIcon";
 import SettingGroup from "./SettingGroup";
 import SettingRow from "./SettingRow";
 import SettingSection from "./SettingSection";
+
+const IMAGE_COMPRESSION_QUALITY_STORAGE_KEY = "memos-image-compression-quality";
+const DEFAULT_IMAGE_COMPRESSION_QUALITY = 90;
 
 const PreferencesSection = () => {
   const t = useTranslate();
@@ -58,6 +62,24 @@ const PreferencesSection = () => {
     );
   };
 
+  const imageCompressionQuality = (() => {
+    const raw = localStorage.getItem(IMAGE_COMPRESSION_QUALITY_STORAGE_KEY);
+    const value = raw ? Number(raw) : DEFAULT_IMAGE_COMPRESSION_QUALITY;
+    if (!Number.isFinite(value) || value <= 0 || value > 100) {
+      return DEFAULT_IMAGE_COMPRESSION_QUALITY;
+    }
+    return Math.round(value);
+  })();
+
+  const handleImageCompressionQualityChanged = (value: string) => {
+    const num = Number(value);
+    if (!Number.isFinite(num)) {
+      return;
+    }
+    const clamped = Math.max(1, Math.min(100, Math.round(num)));
+    localStorage.setItem(IMAGE_COMPRESSION_QUALITY_STORAGE_KEY, String(clamped));
+  };
+
   // Provide default values if setting is not loaded yet
   const setting: UserSetting_GeneralSetting =
     generalSetting ||
@@ -98,6 +120,20 @@ const PreferencesSection = () => {
                 ))}
             </SelectContent>
           </Select>
+        </SettingRow>
+
+        <SettingRow
+          label={t("setting.preference.image-compression-quality")}
+          tooltip={t("setting.preference.image-compression-quality-hint")}
+        >
+          <Input
+            className="w-24 font-mono"
+            type="number"
+            min={1}
+            max={100}
+            defaultValue={String(imageCompressionQuality)}
+            onBlur={(event) => handleImageCompressionQualityChanged(event.target.value)}
+          />
         </SettingRow>
       </SettingGroup>
     </SettingSection>

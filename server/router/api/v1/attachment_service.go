@@ -10,6 +10,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -138,6 +139,20 @@ func (s *APIV1Service) CreateAttachment(ctx context.Context, request *v1pb.Creat
 	create.Size = int64(size)
 	create.Blob = request.Attachment.Content
 
+	if strings.HasPrefix(create.Type, "video/") {
+		if transcodedBlob, transcoded, transcodeErr := transcodeVideoToH264MP4(create.Blob); transcodeErr != nil {
+			slog.Warn("failed to transcode uploaded video",
+				slog.String("filename", create.Filename),
+				slog.String("type", create.Type),
+				slog.String("error", transcodeErr.Error()))
+		} else if transcoded {
+			create.Blob = transcodedBlob
+			create.Size = int64(len(transcodedBlob))
+			create.Type = "video/mp4"
+			create.Filename = forceMP4Filename(create.Filename)
+		}
+	}
+
 	if create.Payload == nil || create.Payload.MotionMedia == nil {
 		if detectedMotion := detectAndroidMotionMedia(create.Blob, create.Type, attachmentUID); detectedMotion != nil {
 			create.Payload = ensureAttachmentPayload(create.Payload)
@@ -184,6 +199,62 @@ func (s *APIV1Service) CreateAttachment(ctx context.Context, request *v1pb.Creat
 	}
 
 	return convertAttachmentFromStore(attachment), nil
+}
+
+func forceMP4Filename(filename string) string {
+	ext := filepath.Ext(filename)
+	if ext == "" {
+		return filename + ".mp4"
+	}
+	return strings.TrimSuffix(filename, ext) + ".mp4"
+}
+
+func transcodeVideoToH264MP4(blob []byte) ([]byte, bool, error) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		return nil, false, nil
+	}
+
+	input, err := os.CreateTemp("", "memos-upload-*.bin")
+	if err != nil {
+		return nil, false, errors.Wrap(err, "failed to create ffmpeg input file")
+	}
+	defer os.Remove(input.Name())
+	defer input.Close()
+
+	output, err := os.CreateTemp("", "memos-upload-*.mp4")
+	if err != nil {
+		return nil, false, errors.Wrap(err, "failed to create ffmpeg output file")
+	}
+	defer os.Remove(output.Name())
+	output.Close()
+
+	if _, err := input.Write(blob); err != nil {
+		return nil, false, errors.Wrap(err, "failed to write ffmpeg input")
+	}
+
+	cmd := exec.Command(
+		"ffmpeg",
+		"-i", input.Name(),
+		"-c:v", "libx264",
+		"-preset", "veryfast",
+		"-movflags", "+faststart",
+		"-pix_fmt", "yuv420p",
+		"-crf", "28",
+		"-r", "24",
+		"-c:a", "aac",
+		"-b:a", "128k",
+		"-y",
+		output.Name(),
+	)
+	if ffmpegOutput, err := cmd.CombinedOutput(); err != nil {
+		return nil, false, errors.Wrap(err, fmt.Sprintf("ffmpeg failed: %s", string(ffmpegOutput)))
+	}
+
+	transcodedBlob, err := os.ReadFile(output.Name())
+	if err != nil {
+		return nil, false, errors.Wrap(err, "failed to read ffmpeg output")
+	}
+	return transcodedBlob, true, nil
 }
 
 func (s *APIV1Service) ListAttachments(ctx context.Context, request *v1pb.ListAttachmentsRequest) (*v1pb.ListAttachmentsResponse, error) {

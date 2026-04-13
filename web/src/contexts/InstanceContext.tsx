@@ -93,15 +93,16 @@ export function InstanceProvider({ children }: { children: ReactNode }) {
     try {
       const profile = await instanceServiceClient.getInstanceProfile({});
 
-      const [generalSetting, memoRelatedSettingResponse, tagsSettingResponse] = await Promise.all([
+      const [generalSetting, memoRelatedSettingResponse, storageSettingResponse, tagsSettingResponse] = await Promise.all([
         instanceServiceClient.getInstanceSetting({ name: buildInstanceSettingName(InstanceSetting_Key.GENERAL) }),
         instanceServiceClient.getInstanceSetting({ name: buildInstanceSettingName(InstanceSetting_Key.MEMO_RELATED) }),
+        instanceServiceClient.getInstanceSetting({ name: buildInstanceSettingName(InstanceSetting_Key.STORAGE) }),
         instanceServiceClient.getInstanceSetting({ name: buildInstanceSettingName(InstanceSetting_Key.TAGS) }),
       ]);
 
       setState({
         profile,
-        settings: [generalSetting, memoRelatedSettingResponse, tagsSettingResponse],
+        settings: [generalSetting, memoRelatedSettingResponse, storageSettingResponse, tagsSettingResponse],
         isInitialized: true,
         isLoading: false,
         profileLoaded: true,

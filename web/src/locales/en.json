@@ -46,7 +46,8 @@
       "confirm-description": "This removes every uploaded file that is not linked to a memo.",
       "description": "These uploads were never attached to a memo. Review or remove them here.",
       "title": "Unlinked uploads"
-    }
+    },
+    "preview-dialog-hint": "Attachment preview dialog. Press Escape to close and use left or right arrow keys to switch items."
   },
   "common": {
     "about": "About",
@@ -104,6 +105,7 @@
     "memos": "Memos",
     "more": "More",
     "name": "Name",
+    "next": "Next",
     "new": "New",
     "nickname": "Nickname",
     "null": "Null",
@@ -112,6 +114,7 @@
     "pin": "Pin",
     "pinned": "Pinned",
     "preview": "Preview",
+    "previous": "Previous",
     "profile": "Profile",
     "properties": "Properties",
     "referenced-by": "Referenced by",
@@ -430,7 +433,9 @@
       "default-memo-sort-option": "Memo display time",
       "default-memo-visibility": "Default memo visibility",
       "label": "Preferences",
-      "theme": "Theme"
+      "theme": "Theme",
+      "image-compression-quality": "Image compression quality",
+      "image-compression-quality-hint": "Used by web uploads, from 1 to 100. Recommended value is 90."
     },
     "shortcut": {
       "delete-confirm": "Are you sure you want to delete shortcut `{{title}}`?",
@@ -472,6 +477,8 @@
       "delete-storage": "Delete Storage",
       "endpoint": "Endpoint",
       "filepath-template": "Filepath template",
+      "image-compression-quality": "Image compression quality",
+      "image-compression-quality-hint": "Used by web uploads, from 1 to 100. Recommended value is 90.",
       "label": "Storage",
       "local-storage-path": "Local storage path",
       "path": "Storage Path",

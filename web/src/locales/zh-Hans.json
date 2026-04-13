@@ -114,7 +114,9 @@
     "username": "用户名",
     "version": "版本",
     "visibility": "可见性",
-    "yourself": "您自己"
+    "yourself": "您自己",
+    "next": "下一张",
+    "previous": "上一张"
   },
   "editor": {
     "add-your-comment-here": "请输入您的评论...",
@@ -337,7 +339,9 @@
       "default-memo-sort-option": "备忘录显示时间",
       "default-memo-visibility": "默认备忘录可见性",
       "theme": "主题",
-      "label": "偏好设置"
+      "label": "偏好设置",
+      "image-compression-quality": "图片压缩质量",
+      "image-compression-quality-hint": "用于网页端上传，范围 1 到 100，建议值 90。"
     },
     "shortcut": {
       "delete-confirm": "您确定要删除捷径 `{{title}}` 吗？",
@@ -401,7 +405,9 @@
       "url-suffix": "链接后缀",
       "url-suffix-placeholder": "自定义链接后缀，可选",
       "warning-text": "您确定要删除存储服务“{{name}}”吗？（此操作不可逆）",
-      "label": "存储"
+      "label": "存储",
+      "image-compression-quality": "图片压缩质量",
+      "image-compression-quality-hint": "用于网页端上传，范围 1 到 100，建议值 90。"
     },
     "system": {
       "additional-script": "自定义脚本",
@@ -549,5 +555,8 @@
     "connected": "已连接",
     "connecting": "正在连接",
     "disconnected": "已断开"
+  },
+  "attachment-library": {
+    "preview-dialog-hint": "附件预览对话框。按 Esc 关闭，按左右方向键切换。"
   }
 }

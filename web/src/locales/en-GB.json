@@ -151,7 +151,9 @@
       "default-memo-sort-option": "Memo display time",
       "default-memo-visibility": "Default memo visibility",
       "label": "Preferences",
-      "theme": "Theme"
+      "theme": "Theme",
+      "image-compression-quality": "Image compression quality",
+      "image-compression-quality-hint": "Used by web uploads, from 1 to 100. Recommended value is 90."
     },
     "shortcut": {
       "delete-confirm": "Are you sure you want to delete shortcut `{{title}}`?",
@@ -190,7 +192,9 @@
       "url-prefix-placeholder": "Custom URL prefix, optional",
       "url-suffix": "URL suffix",
       "url-suffix-placeholder": "Custom URL suffix, optional",
-      "warning-text": "Are you sure you want to delete storage service `{{name}}`? THIS ACTION IS IRREVERSIBLE"
+      "warning-text": "Are you sure you want to delete storage service `{{name}}`? THIS ACTION IS IRREVERSIBLE",
+      "image-compression-quality": "Image compression quality",
+      "image-compression-quality-hint": "Used by web uploads, from 1 to 100. Recommended value is 90."
     },
     "version": "Version",
     "tags": {
@@ -390,7 +394,9 @@
     "username": "Username",
     "version": "Version",
     "visibility": "Visibility",
-    "yourself": "Yourself"
+    "yourself": "Yourself",
+    "next": "Next",
+    "previous": "Previous"
   },
   "editor": {
     "add-your-comment-here": "Add your comment here...",
@@ -540,5 +546,8 @@
     "select-visibility": "Visibility",
     "tags": "Tags",
     "upload-attachment": "Upload Attachment(s)"
+  },
+  "attachment-library": {
+    "preview-dialog-hint": "Attachment preview dialog. Press Escape to close and use left or right arrow keys to switch items."
   }
 }

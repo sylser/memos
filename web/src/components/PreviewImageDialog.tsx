@@ -1,11 +1,12 @@
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import MotionPhotoPreview from "@/components/MotionPhotoPreview";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { VisuallyHidden } from "@/components/ui/visually-hidden";
 import useMediaQuery from "@/hooks/useMediaQuery";
 import { cn } from "@/lib/utils";
+import { useTranslate } from "@/utils/i18n";
 import type { PreviewMediaItem } from "@/utils/media-item";
 
 interface Props {
@@ -17,8 +18,11 @@ interface Props {
 }
 
 function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIndex = 0 }: Props) {
+  const t = useTranslate();
   const sm = useMediaQuery("sm");
   const [currentIndex, setCurrentIndex] = useState(initialIndex);
+  const [scale, setScale] = useState(1);
+  const gestureRef = useRef<{ startX: number; startY: number; startDistance: number; startScale: number; pinching: boolean } | null>(null);
   const previewItems = useMemo(
     () => items ?? imgUrls.map((url) => ({ id: url, kind: "image" as const, sourceUrl: url, posterUrl: url, filename: "Image" })),
     [imgUrls, items],
@@ -27,6 +31,7 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
   useEffect(() => {
     if (open) {
       setCurrentIndex(initialIndex);
+      setScale(1);
     }
   }, [initialIndex, open]);
 
@@ -67,8 +72,15 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
   }
 
   const handleClose = () => onOpenChange(false);
-  const handlePrevious = () => setCurrentIndex((prev) => Math.max(prev - 1, 0));
-  const handleNext = () => setCurrentIndex((prev) => Math.min(prev + 1, itemCount - 1));
+  const handlePrevious = () => {
+    setScale(1);
+    setCurrentIndex((prev) => Math.max(prev - 1, 0));
+  };
+  const handleNext = () => {
+    setScale(1);
+    setCurrentIndex((prev) => Math.min(prev + 1, itemCount - 1));
+  };
+  const canZoom = currentItem.kind !== "video";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -98,7 +110,7 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
               variant="ghost"
               size="icon"
               className="shrink-0 rounded-full bg-white/10 text-white hover:bg-white/16 hover:text-white"
-              aria-label="Close preview"
+              aria-label={t("common.close")}
             >
               <X className="h-4 w-4" />
             </Button>
@@ -113,7 +125,81 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
             }
           }}
         >
-          <div className="flex max-h-full max-w-full items-center justify-center" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="flex max-h-full max-w-full touch-none items-center justify-center"
+            onClick={(event) => event.stopPropagation()}
+            onTouchStart={(event) => {
+              if (!hasMultiple && !canZoom) {
+                return;
+              }
+              if (event.touches.length === 2 && canZoom) {
+                const a = event.touches.item(0);
+                const b = event.touches.item(1);
+                if (!a || !b) {
+                  return;
+                }
+                gestureRef.current = {
+                  startX: 0,
+                  startY: 0,
+                  startDistance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+                  startScale: scale,
+                  pinching: true,
+                };
+                return;
+              }
+              if (event.touches.length === 1) {
+                const touch = event.touches.item(0);
+                if (!touch) {
+                  return;
+                }
+                gestureRef.current = {
+                  startX: touch.clientX,
+                  startY: touch.clientY,
+                  startDistance: 0,
+                  startScale: scale,
+                  pinching: false,
+                };
+              }
+            }}
+            onTouchMove={(event) => {
+              if (event.touches.length === 2 && canZoom && gestureRef.current?.pinching) {
+                const a = event.touches.item(0);
+                const b = event.touches.item(1);
+                if (!a || !b) {
+                  return;
+                }
+                const currentDistance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+                const zoom = Math.max(
+                  1,
+                  Math.min((currentDistance / Math.max(gestureRef.current.startDistance, 1)) * gestureRef.current.startScale, 4),
+                );
+                setScale(zoom);
+              }
+            }}
+            onTouchEnd={(event) => {
+              const gesture = gestureRef.current;
+              if (!gesture) {
+                return;
+              }
+              if (gesture.pinching) {
+                gestureRef.current = null;
+                return;
+              }
+              if (event.changedTouches.length === 1 && hasMultiple && scale <= 1.02) {
+                const touch = event.changedTouches[0];
+                const deltaX = touch.clientX - gesture.startX;
+                const deltaY = touch.clientY - gesture.startY;
+                if (Math.abs(deltaX) > 60 && Math.abs(deltaX) > Math.abs(deltaY)) {
+                  if (deltaX < 0 && canGoNext) {
+                    handleNext();
+                  } else if (deltaX > 0 && canGoPrevious) {
+                    handlePrevious();
+                  }
+                }
+              }
+              gestureRef.current = null;
+            }}
+          >
             {currentItem.kind === "video" ? (
               <video
                 key={currentItem.id}
@@ -138,7 +224,8 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
               <img
                 src={currentItem.sourceUrl}
                 alt={`Preview image ${safeIndex + 1} of ${itemCount}`}
-                className="max-h-[calc(100vh-8rem)] max-w-[calc(100vw-1.5rem)] rounded-md object-contain select-none sm:max-h-[calc(100vh-7rem)] sm:max-w-[calc(100vw-8rem)]"
+                className="max-h-[calc(100vh-8rem)] max-w-[calc(100vw-1.5rem)] rounded-md object-contain select-none transition-transform sm:max-h-[calc(100vh-7rem)] sm:max-w-[calc(100vw-8rem)]"
+                style={{ transform: `scale(${scale})` }}
                 draggable={false}
                 loading="eager"
                 decoding="async"
@@ -152,14 +239,14 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
             <NavButton
               side="left"
               disabled={!canGoPrevious}
-              label="Previous item"
+              label={t("common.previous")}
               onClick={handlePrevious}
               icon={<ChevronLeft className="h-5 w-5" />}
             />
             <NavButton
               side="right"
               disabled={!canGoNext}
-              label="Next item"
+              label={t("common.next")}
               onClick={handleNext}
               icon={<ChevronRight className="h-5 w-5" />}
             />
@@ -177,7 +264,7 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
                 disabled={!canGoPrevious}
                 className="rounded-full px-3 text-white hover:bg-white/10 hover:text-white disabled:text-white/35"
               >
-                Prev
+                {t("common.previous")}
               </Button>
               <div className="px-3 text-xs text-white/75">
                 {safeIndex + 1} / {itemCount}
@@ -190,14 +277,14 @@ function PreviewImageDialog({ open, onOpenChange, imgUrls = [], items, initialIn
                 disabled={!canGoNext}
                 className="rounded-full px-3 text-white hover:bg-white/10 hover:text-white disabled:text-white/35"
               >
-                Next
+                {t("common.next")}
               </Button>
             </div>
           </div>
         )}
 
         <div id="image-preview-description" className="sr-only">
-          Attachment preview dialog. Press Escape to close and use left or right arrow keys to switch items.
+          {t("attachment-library.preview-dialog-hint")}
         </div>
       </DialogContent>
     </Dialog>
