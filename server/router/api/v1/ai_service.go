@@ -7,13 +7,10 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/pkg/errors"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/usememos/memos/internal/ai"
-	"github.com/usememos/memos/internal/ai/gemini"
-	"github.com/usememos/memos/internal/ai/openai"
 	v1pb "github.com/usememos/memos/proto/gen/api/v1"
 	storepb "github.com/usememos/memos/proto/gen/store"
 )
@@ -93,11 +90,11 @@ func (s *APIV1Service) Transcribe(ctx context.Context, request *v1pb.TranscribeR
 		return nil, status.Errorf(codes.InvalidArgument, "audio content type %q is not supported", contentType)
 	}
 
-	provider, model, err := s.resolveAIProviderForTranscription(ctx, request.ProviderId, request.Config.GetModel())
+	provider, model, err := s.resolveAIProviderForTranscription(ctx, request.ProviderId)
 	if err != nil {
 		return nil, err
 	}
-	transcriber, err := newAITranscriber(provider)
+	transcriber, err := ai.NewTranscriber(provider)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "failed to create AI transcriber: %v", err)
 	}
@@ -119,7 +116,7 @@ func (s *APIV1Service) Transcribe(ctx context.Context, request *v1pb.TranscribeR
 	}, nil
 }
 
-func (s *APIV1Service) resolveAIProviderForTranscription(ctx context.Context, providerID string, model string) (ai.ProviderConfig, string, error) {
+func (s *APIV1Service) resolveAIProviderForTranscription(ctx context.Context, providerID string) (ai.ProviderConfig, string, error) {
 	setting, err := s.Store.GetInstanceAISetting(ctx)
 	if err != nil {
 		return ai.ProviderConfig{}, "", status.Errorf(codes.Internal, "failed to get AI setting: %v", err)
@@ -137,28 +134,20 @@ func (s *APIV1Service) resolveAIProviderForTranscription(ctx context.Context, pr
 	if err != nil {
 		return ai.ProviderConfig{}, "", status.Errorf(codes.NotFound, "AI provider not found")
 	}
-	selectedModel := strings.TrimSpace(model)
-	if selectedModel == "" {
-		selectedModel = provider.DefaultModel
-	}
-	if selectedModel == "" {
-		return ai.ProviderConfig{}, "", status.Errorf(codes.InvalidArgument, "model is required")
-	}
-	if !containsString(provider.Models, selectedModel) {
-		return ai.ProviderConfig{}, "", status.Errorf(codes.InvalidArgument, "model %q is not configured for provider %q", selectedModel, provider.ID)
+	selectedModel, err := ai.DefaultTranscriptionModel(provider.Type)
+	if err != nil {
+		return ai.ProviderConfig{}, "", status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 	return *provider, selectedModel, nil
 }
 
 func convertAIProviderConfigFromStore(provider *storepb.AIProviderConfig) ai.ProviderConfig {
 	return ai.ProviderConfig{
-		ID:           provider.GetId(),
-		Title:        provider.GetTitle(),
-		Type:         convertAIProviderTypeFromStore(provider.GetType()),
-		Endpoint:     provider.GetEndpoint(),
-		APIKey:       provider.GetApiKey(),
-		Models:       provider.GetModels(),
-		DefaultModel: provider.GetDefaultModel(),
+		ID:       provider.GetId(),
+		Title:    provider.GetTitle(),
+		Type:     convertAIProviderTypeFromStore(provider.GetType()),
+		Endpoint: provider.GetEndpoint(),
+		APIKey:   provider.GetApiKey(),
 	}
 }
 
@@ -166,35 +155,11 @@ func convertAIProviderTypeFromStore(providerType storepb.AIProviderType) ai.Prov
 	switch providerType {
 	case storepb.AIProviderType_OPENAI:
 		return ai.ProviderOpenAI
-	case storepb.AIProviderType_OPENAI_COMPATIBLE:
-		return ai.ProviderOpenAICompatible
 	case storepb.AIProviderType_GEMINI:
 		return ai.ProviderGemini
-	case storepb.AIProviderType_ANTHROPIC:
-		return ai.ProviderAnthropic
 	default:
 		return ""
 	}
-}
-
-func newAITranscriber(provider ai.ProviderConfig) (ai.Transcriber, error) {
-	switch provider.Type {
-	case ai.ProviderOpenAI, ai.ProviderOpenAICompatible:
-		return openai.NewTranscriber(provider)
-	case ai.ProviderGemini:
-		return gemini.NewTranscriber(provider)
-	default:
-		return nil, errors.Wrapf(ai.ErrCapabilityUnsupported, "provider type %q", provider.Type)
-	}
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 func isSupportedTranscriptionContentType(contentType string) bool {
