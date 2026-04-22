@@ -11,17 +11,35 @@ import (
 )
 
 func (d *DB) UpsertUserSetting(ctx context.Context, upsert *store.UserSetting) (*store.UserSetting, error) {
-	stmt := `
-		INSERT INTO user_setting (
-			user_id, key, value
-		)
-		VALUES ($1, $2, $3)
-		ON CONFLICT(user_id, key) DO UPDATE 
-		SET value = EXCLUDED.value
+	// Keep compatibility with legacy PostgreSQL schemas that may miss the
+	// UNIQUE(user_id, key) constraint. We update first and insert only when no
+	// row exists, instead of relying on ON CONFLICT.
+	updateStmt := `
+		UPDATE user_setting
+		SET value = $3
+		WHERE user_id = $1 AND key = $2
 	`
-	if _, err := d.db.ExecContext(ctx, stmt, upsert.UserID, upsert.Key.String(), upsert.Value); err != nil {
+	result, err := d.db.ExecContext(ctx, updateStmt, upsert.UserID, upsert.Key.String(), upsert.Value)
+	if err != nil {
 		return nil, err
 	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, err
+	}
+	if rowsAffected == 0 {
+		insertStmt := `
+			INSERT INTO user_setting (
+				user_id, key, value
+			)
+			VALUES ($1, $2, $3)
+		`
+		if _, err := d.db.ExecContext(ctx, insertStmt, upsert.UserID, upsert.Key.String(), upsert.Value); err != nil {
+			return nil, err
+		}
+	}
+
 	return upsert, nil
 }
 

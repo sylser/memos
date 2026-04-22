@@ -1140,10 +1140,10 @@ func convertUserSettingFromStore(storeSetting *storepb.UserSetting, user *store.
 			},
 		}
 	default:
-		// Default to general setting if unknown key
-		setting.Value = &v1pb.UserSetting_GeneralSetting_{
-			GeneralSetting: getDefaultUserGeneralSetting(),
-		}
+		// Ignore unsupported/internal settings when listing user settings.
+		// Returning a default general setting here can override the real locale
+		// on the frontend if this row appears earlier in DB result order.
+		return nil
 	}
 
 	return setting
