@@ -33,6 +33,16 @@ func isSSESuppressed(ctx context.Context) bool {
 	return ok && v
 }
 
+func isUniqueConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "UNIQUE constraint failed") ||
+		strings.Contains(errMsg, "duplicate key") ||
+		strings.Contains(errMsg, "Duplicate entry")
+}
+
 func (s *APIV1Service) CreateMemo(ctx context.Context, request *v1pb.CreateMemoRequest) (*v1pb.Memo, error) {
 	user, err := s.fetchCurrentUser(ctx)
 	if err != nil {
@@ -97,12 +107,26 @@ func (s *APIV1Service) CreateMemo(ctx context.Context, request *v1pb.CreateMemoR
 	}
 
 	memo, err := s.Store.CreateMemo(ctx, create)
+	if err != nil && request.MemoId == "" && isUniqueConstraintError(err) {
+		// For server-generated IDs, retry a few times on unexpected UID collisions.
+		for range 3 {
+			memoUID, err = ValidateAndGenerateUID("")
+			if err != nil {
+				return nil, err
+			}
+			create.UID = memoUID
+			memo, err = s.Store.CreateMemo(ctx, create)
+			if err == nil {
+				break
+			}
+			if !isUniqueConstraintError(err) {
+				break
+			}
+		}
+	}
 	if err != nil {
 		// Check for unique constraint violation (AIP-133 compliance)
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "UNIQUE constraint failed") ||
-			strings.Contains(errMsg, "duplicate key") ||
-			strings.Contains(errMsg, "Duplicate entry") {
+		if isUniqueConstraintError(err) {
 			return nil, status.Errorf(codes.AlreadyExists, "memo with ID %q already exists", memoUID)
 		}
 		return nil, err

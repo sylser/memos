@@ -32,9 +32,35 @@ func (d *DB) CreateAttachment(ctx context.Context, create *store.Attachment) (*s
 
 	stmt := "INSERT INTO attachment (" + strings.Join(fields, ", ") + ") VALUES (" + placeholders(len(args)) + ") RETURNING id, created_ts, updated_ts"
 	if err := d.db.QueryRowContext(ctx, stmt, args...).Scan(&create.ID, &create.CreatedTs, &create.UpdatedTs); err != nil {
+		if isAttachmentPrimaryKeyDuplicateError(err) {
+			if syncErr := d.syncAttachmentIDSequence(ctx); syncErr != nil {
+				return nil, errors.Wrap(syncErr, "failed to sync attachment ID sequence")
+			}
+			if retryErr := d.db.QueryRowContext(ctx, stmt, args...).Scan(&create.ID, &create.CreatedTs, &create.UpdatedTs); retryErr != nil {
+				return nil, retryErr
+			}
+			return create, nil
+		}
 		return nil, err
 	}
 	return create, nil
+}
+
+func isAttachmentPrimaryKeyDuplicateError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errMsg := err.Error()
+	return strings.Contains(errMsg, "duplicate key value violates unique constraint") &&
+		strings.Contains(errMsg, "attachment_pkey")
+}
+
+func (d *DB) syncAttachmentIDSequence(ctx context.Context) error {
+	_, err := d.db.ExecContext(
+		ctx,
+		`SELECT setval(pg_get_serial_sequence('attachment', 'id'), COALESCE((SELECT MAX(id) FROM attachment), 0), true)`,
+	)
+	return err
 }
 
 func (d *DB) ListAttachments(ctx context.Context, find *store.FindAttachment) ([]*store.Attachment, error) {
