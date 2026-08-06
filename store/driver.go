@@ -13,6 +13,11 @@ type Driver interface {
 
 	IsInitialized(ctx context.Context) (bool, error)
 
+	// GetDatabaseSize returns the database size in bytes, or -1 if unavailable.
+	// A non-nil error indicates a hard failure; -1 with nil error means the
+	// driver cannot report a size from the underlying database.
+	GetDatabaseSize(ctx context.Context) (int64, error)
+
 	// Attachment model related methods.
 	CreateAttachment(ctx context.Context, create *Attachment) (*Attachment, error)
 	ListAttachments(ctx context.Context, find *FindAttachment) ([]*Attachment, error)
@@ -40,7 +45,7 @@ type Driver interface {
 	CreateUser(ctx context.Context, create *User) (*User, error)
 	UpdateUser(ctx context.Context, update *UpdateUser) (*User, error)
 	ListUsers(ctx context.Context, find *FindUser) ([]*User, error)
-	DeleteUser(ctx context.Context, delete *DeleteUser) error
+	DeleteUser(ctx context.Context, delete *DeleteUser) (*DeleteUserResult, error)
 
 	// UserSetting model related methods.
 	UpsertUserSetting(ctx context.Context, upsert *UserSetting) (*UserSetting, error)
@@ -53,6 +58,8 @@ type Driver interface {
 	ListIdentityProviders(ctx context.Context, find *FindIdentityProvider) ([]*IdentityProvider, error)
 	UpdateIdentityProvider(ctx context.Context, update *UpdateIdentityProvider) (*IdentityProvider, error)
 	DeleteIdentityProvider(ctx context.Context, delete *DeleteIdentityProvider) error
+	ApplyAuthenticationConfigMutation(ctx context.Context, mutation *AuthenticationConfigMutation) error
+	IsRetryableAuthenticationMutationError(err error) bool
 
 	// Inbox model related methods.
 	CreateInbox(ctx context.Context, create *Inbox) (*Inbox, error)
@@ -74,6 +81,7 @@ type Driver interface {
 
 	// UserIdentity model related methods.
 	CreateUserIdentity(ctx context.Context, create *UserIdentity) (*UserIdentity, error)
+	CreateUserWithIdentity(ctx context.Context, createUser *User, createIdentity *UserIdentity) (*User, error)
 	ListUserIdentities(ctx context.Context, find *FindUserIdentity) ([]*UserIdentity, error)
 	DeleteUserIdentities(ctx context.Context, delete *DeleteUserIdentity) error
 }

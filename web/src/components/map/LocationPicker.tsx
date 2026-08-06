@@ -1,14 +1,19 @@
 import L, { LatLng } from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { ExternalLinkIcon, MinusIcon, PlusIcon } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
+import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { MapContainer, Marker, useMap, useMapEvents } from "react-leaflet";
 import { cn } from "@/lib/utils";
 import { defaultMarkerIcon, ThemedTileLayer } from "./map-utils";
+import type { MapPoint } from "./types";
+
+const toLatLng = (point: MapPoint): LatLng => new LatLng(point.lat, point.lng);
+const fromLatLng = (latlng: LatLng): MapPoint => ({ lat: latlng.lat, lng: latlng.lng });
 
 interface MarkerProps {
   position: LatLng | undefined;
-  onChange: (position: LatLng) => void;
+  onChange: (position: MapPoint) => void;
   readonly?: boolean;
 }
 
@@ -24,8 +29,7 @@ const LocationMarker = (props: MarkerProps) => {
 
       setPosition(e.latlng);
       map.locate();
-      // Call the parent onChange function.
-      props.onChange(e.latlng);
+      onChange(fromLatLng(e.latlng));
     },
     locationfound() {},
   });
@@ -66,11 +70,9 @@ const GlassButton = ({ icon, onClick, ariaLabel, title }: GlassButtonProps) => {
       aria-label={ariaLabel}
       title={title}
       className={cn(
-        "h-8 w-8 flex items-center justify-center rounded-lg",
-        "cursor-pointer transition-all duration-200",
-        "bg-white/80 backdrop-blur-md border border-white/30 shadow-lg",
-        "hover:bg-white/90 hover:scale-105 active:scale-95",
-        "dark:bg-black/80 dark:border-white/10 dark:hover:bg-black/90",
+        "inline-flex items-center justify-center h-8 w-8 rounded-lg",
+        "cursor-pointer border border-border/80 bg-background/88 text-foreground shadow-sm backdrop-blur-md transition-all duration-200",
+        "hover:scale-105 hover:bg-background hover:shadow-md active:scale-95",
         "focus:outline-none focus:ring-2 focus:ring-blue-500",
       )}
     >
@@ -81,7 +83,7 @@ const GlassButton = ({ icon, onClick, ariaLabel, title }: GlassButtonProps) => {
 
 // Container for all map control buttons
 interface ControlButtonsProps {
-  position: LatLng | undefined;
+  position: MapPoint | undefined;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onOpenGoogleMaps: () => void;
@@ -129,7 +131,7 @@ class MapControlsContainer extends L.Control {
 }
 
 interface MapControlsProps {
-  position: LatLng | undefined;
+  position: MapPoint | undefined;
 }
 
 const MapControls = ({ position }: MapControlsProps) => {
@@ -214,14 +216,17 @@ const MapCleanup = () => {
 
 interface MapProps {
   readonly?: boolean;
-  latlng?: LatLng;
-  onChange?: (position: LatLng) => void;
+  latlng?: MapPoint;
+  onChange?: (position: MapPoint) => void;
+  className?: string;
 }
 
-const DEFAULT_CENTER_LAT_LNG = new LatLng(48.8584, 2.2945);
+const DEFAULT_CENTER: MapPoint = { lat: 48.8584, lng: 2.2945 };
+const noopOnLocationChange = () => {};
 
-const LeafletMap = (props: MapProps) => {
-  const position = props.latlng || DEFAULT_CENTER_LAT_LNG;
+const LocationPicker = ({ readonly: readOnly = false, latlng, onChange = noopOnLocationChange }: LocationPickerProps) => {
+  const mapCenter = useMemo(() => toLatLng(latlng ?? DEFAULT_CENTER), [latlng?.lat, latlng?.lng]);
+  const markerPosition = mapCenter;
 
   return (
     <MapContainer
@@ -233,10 +238,9 @@ const LeafletMap = (props: MapProps) => {
       attributionControl={false}
     >
       <ThemedTileLayer />
-      <LocationMarker position={position} readonly={props.readonly} onChange={props.onChange ? props.onChange : () => {}} />
-      <MapControls position={props.latlng} />
+      <LocationMarker position={markerPosition} readonly={readOnly} onChange={onChange} />
+      <MapControls position={latlng} />
       <MapCleanup />
-    </MapContainer>
   );
 };
 

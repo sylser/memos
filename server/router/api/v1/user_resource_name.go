@@ -26,23 +26,11 @@ func parseUsernameFromName(name string) (string, error) {
 	return username, nil
 }
 
-func validateUsername(username string) error {
-	if username == "" || isNumericUsername(username) || !base.UIDMatcher.MatchString(username) {
+func validateWritableUsername(username string) error {
+	if !base.IsValidUsername(username) {
 		return errors.Errorf("invalid username %q", username)
 	}
 	return nil
-}
-
-func isNumericUsername(username string) bool {
-	if username == "" {
-		return false
-	}
-	for _, char := range username {
-		if char < '0' || char > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 // ResolveUserByName resolves a username-based user resource name to a store user.

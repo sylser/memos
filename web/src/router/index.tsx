@@ -1,40 +1,31 @@
-import { lazy } from "react";
-import { createBrowserRouter, type RouteObject } from "react-router-dom";
+import { createBrowserRouter, Navigate, type RouteObject } from "react-router-dom";
 import App from "@/App";
 import { ChunkLoadErrorFallback } from "@/components/ErrorBoundary";
 import MainLayout from "@/layouts/MainLayout";
 import RootLayout from "@/layouts/RootLayout";
-import Home from "@/pages/Home";
-import { LandingRoute, RequireAuthRoute, RequireGuestRoute } from "./guards";
+import { lazyWithReload } from "@/utils/lazy";
+import {
+  LandingRoute,
+  RequireAuthRoute,
+  RequireFullInitializationRoute,
+  RequireGuestRoute,
+  RequireInstanceInitializationRoute,
+} from "./guards";
 import { ROUTES } from "./routes";
 
-// Wrap lazy imports to auto-reload on chunk load failure (e.g., after redeployment).
-function lazyWithReload<T extends React.ComponentType>(factory: () => Promise<{ default: T }>) {
-  return lazy(() =>
-    factory().catch((error) => {
-      const isChunkError =
-        error?.message?.includes("Failed to fetch dynamically imported module") ||
-        error?.message?.includes("Importing a module script failed");
-      const reloadKey = "chunk-reload";
-      if (isChunkError && !sessionStorage.getItem(reloadKey)) {
-        sessionStorage.setItem(reloadKey, "1");
-        window.location.reload();
-      }
-      throw error;
-    }),
-  );
-}
-
 const AdminSignIn = lazyWithReload(() => import("@/pages/AdminSignIn"));
+const About = lazyWithReload(() => import("@/pages/About"));
 const Archived = lazyWithReload(() => import("@/pages/Archived"));
 const AuthCallback = lazyWithReload(() => import("@/pages/AuthCallback"));
 const Explore = lazyWithReload(() => import("@/pages/Explore"));
+const Home = lazyWithReload(() => import("@/pages/Home"));
 const Inboxes = lazyWithReload(() => import("@/pages/Inboxes"));
 const MemoDetail = lazyWithReload(() => import("@/pages/MemoDetail"));
 const NotFound = lazyWithReload(() => import("@/pages/NotFound"));
 const PermissionDenied = lazyWithReload(() => import("@/pages/PermissionDenied"));
 const Attachments = lazyWithReload(() => import("@/pages/Attachments"));
 const Setting = lazyWithReload(() => import("@/pages/Setting"));
+const Shortcuts = lazyWithReload(() => import("@/pages/Shortcuts"));
 const SignIn = lazyWithReload(() => import("@/pages/SignIn"));
 const SignUp = lazyWithReload(() => import("@/pages/SignUp"));
 const UserProfile = lazyWithReload(() => import("@/pages/UserProfile"));
@@ -62,30 +53,46 @@ export const routeConfig: RouteObject[] = [
           // one-time OAuth state. Keep it outside the guest-only subtree.
           { path: "callback", element: <AuthCallback /> },
           {
-            element: <RequireGuestRoute />,
+            element: <RequireInstanceInitializationRoute />,
             children: [
-              { path: "", element: <SignIn /> },
-              { path: "admin", element: <AdminSignIn /> },
-              { path: "signup", element: <SignUp /> },
+              {
+                element: <RequireGuestRoute />,
+                children: [
+                  { path: "", element: <SignIn /> },
+                  { path: "admin", element: <AdminSignIn /> },
+                  { path: "signup", element: <SignUp /> },
+                ],
+              },
             ],
           },
         ],
       },
-      { index: true, element: <LandingRoute /> },
+      // Backward compatibility: the old `/home` URL now lives at `/`.
+      { path: "home", element: <Navigate to={Routes.HOME} replace /> },
       {
-        path: Routes.ENTRY,
         element: <RootLayout />,
         children: [
           {
             element: <MainLayout />,
             children: [
+              {
+                element: <LandingRoute />,
+                children: [{ index: true, element: <Home /> }],
+              },
+              {
+                element: <RequireInstanceInitializationRoute />,
+                children: [{ path: Routes.ABOUT, element: <About /> }],
+              },
               { path: Routes.EXPLORE, element: <Explore /> },
               { path: "u/:username", element: <UserProfile /> },
               {
                 element: <RequireAuthRoute />,
                 children: [
-                  { path: Routes.HOME, element: <Home /> },
                   { path: Routes.ARCHIVED, element: <Archived /> },
+                  {
+                    element: <RequireFullInitializationRoute />,
+                    children: [{ path: Routes.SHORTCUTS, element: <Shortcuts /> }],
+                  },
                 ],
               },
             ],
@@ -95,9 +102,14 @@ export const routeConfig: RouteObject[] = [
           {
             element: <RequireAuthRoute />,
             children: [
-              { path: Routes.ATTACHMENTS, element: <Attachments /> },
-              { path: Routes.INBOX, element: <Inboxes /> },
-              { path: Routes.SETTING, element: <Setting /> },
+              {
+                element: <RequireFullInitializationRoute />,
+                children: [
+                  { path: Routes.ATTACHMENTS, element: <Attachments /> },
+                  { path: Routes.INBOX, element: <Inboxes /> },
+                  { path: Routes.SETTING, element: <Setting /> },
+                ],
+              },
             ],
           },
           { path: "403", element: <PermissionDenied /> },

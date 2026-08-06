@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"net/http"
@@ -76,6 +77,43 @@ func TestSSEHandler_Authentication(t *testing.T) {
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		require.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("valid token streams initial comment and event", func(t *testing.T) {
+		server := httptest.NewServer(e)
+		defer server.Close()
+
+		reqCtx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, server.URL+"/api/v1/sse", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := server.Client().Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+
+		reader := bufio.NewReader(resp.Body)
+		line, err := reader.ReadString('\n')
+		require.NoError(t, err)
+		require.Equal(t, ": connected\n", line)
+		line, err = reader.ReadString('\n')
+		require.NoError(t, err)
+		require.Equal(t, "\n", line)
+
+		ts.Service.SSEHub.Broadcast(&apiv1.SSEEvent{
+			Type: apiv1.SSEEventMemoUpdated,
+			Name: "memos/streamed",
+		})
+
+		line, err = reader.ReadString('\n')
+		require.NoError(t, err)
+		require.Equal(t, "data: {\"type\":\"memo.updated\",\"name\":\"memos/streamed\"}\n", line)
+		line, err = reader.ReadString('\n')
+		require.NoError(t, err)
+		require.Equal(t, "\n", line)
 	})
 
 	t.Run("hub close disconnects stream", func(t *testing.T) {

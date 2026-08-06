@@ -1,9 +1,11 @@
 package store
 
 import (
+	"sync"
 	"time"
 
 	"github.com/usememos/memos/internal/profile"
+	storepb "github.com/usememos/memos/proto/gen/store"
 	"github.com/usememos/memos/store/cache"
 )
 
@@ -12,6 +14,13 @@ type Store struct {
 	profile *profile.Profile
 	driver  Driver
 
+	userCreateMu sync.Mutex
+	authConfigMu sync.Mutex
+	patMu        sync.Mutex
+
+	deploymentConfigMu sync.RWMutex
+	deploymentConfig   *deploymentConfiguration
+
 	// Cache settings
 	cacheConfig cache.Config
 
@@ -19,6 +28,11 @@ type Store struct {
 	instanceSettingCache *cache.Cache // cache for instance settings
 	userCache            *cache.Cache // cache for users
 	userSettingCache     *cache.Cache // cache for user settings
+}
+
+type deploymentConfiguration struct {
+	identityProviders map[string]*storepb.IdentityProvider
+	instanceSettings  map[storepb.InstanceSettingKey]*storepb.InstanceSetting
 }
 
 // New creates a new instance of Store.
@@ -38,6 +52,10 @@ func New(driver Driver, profile *profile.Profile) *Store {
 		instanceSettingCache: cache.New(cacheConfig),
 		userCache:            cache.New(cacheConfig),
 		userSettingCache:     cache.New(cacheConfig),
+		deploymentConfig: &deploymentConfiguration{
+			identityProviders: map[string]*storepb.IdentityProvider{},
+			instanceSettings:  map[storepb.InstanceSettingKey]*storepb.InstanceSetting{},
+		},
 	}
 
 	return store

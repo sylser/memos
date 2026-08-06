@@ -1,7 +1,5 @@
 import type { Location, Memo, Visibility } from "@/types/proto/api/v1/memo_service_pb";
-import type { EditorRefActions } from "../Editor";
-import type { Command } from "../Editor/commands";
-import type { EditorState } from "../state";
+import type { AudioRecorderStatus } from "../hooks/useAudioRecorder";
 
 export interface MemoEditorProps {
   className?: string;
@@ -11,12 +9,26 @@ export interface MemoEditorProps {
   memo?: Memo;
   parentMemoName?: string;
   autoFocus?: boolean;
+  /** Opens this editor instance directly in the existing focus-mode presentation. */
+  initialFocusMode?: boolean;
+  /** Closes an externally mounted editor when the user exits focus mode. */
+  onFocusModeExit?: () => void;
+  /**
+   * Default `createTime` for a *new* memo (create mode only). When set, the
+   * editor seeds both `createTime` and `updateTime` to this value and renders
+   * the timestamp popover so the user can adjust before saving. Tracked live:
+   * if the prop changes after mount, the editor's timestamps re-sync. Ignored
+   * in edit mode (when `memo` is set).
+   */
+  defaultCreateTime?: Date;
   onConfirm?: (memoName: string) => void;
   onCancel?: () => void;
 }
 
 export interface EditorContentProps {
   placeholder?: string;
+  /** Invoked by the in-editor save shortcut (Cmd/Ctrl+Enter). */
+  onSubmit: () => void;
 }
 
 export interface EditorToolbarProps {
@@ -24,6 +36,9 @@ export interface EditorToolbarProps {
   onCancel?: () => void;
   memoName?: string;
   onAudioRecorderClick: () => void;
+  /** Whether the formatting toolbar is shown in normal mode (persisted preference). */
+  isFormattingToolbarVisible: boolean;
+  onToggleFormattingToolbar: () => void;
 }
 
 export interface EditorMetadataProps {
@@ -31,7 +46,7 @@ export interface EditorMetadataProps {
 }
 
 export interface AudioRecorderPanelProps {
-  audioRecorder: EditorState["audioRecorder"];
+  audioRecorder: { status: AudioRecorderStatus; elapsedSeconds: number };
   /** Active mic stream while recording; used for live waveform visualization. */
   mediaStream: MediaStream | null;
   onStop: () => void;
@@ -59,33 +74,15 @@ export interface InsertMenuProps {
   onToggleFocusMode?: () => void;
   memoName?: string;
   onAudioRecorderClick?: () => void;
-}
-
-export interface TagSuggestionsProps {
-  editorRef: React.RefObject<HTMLTextAreaElement>;
-  editorActions: React.ForwardedRef<EditorRefActions>;
-}
-
-export interface SlashCommandsProps {
-  editorRef: React.RefObject<HTMLTextAreaElement>;
-  editorActions: React.ForwardedRef<EditorRefActions>;
-  commands: Command[];
-}
-
-export interface EditorProps {
-  className: string;
-  initialContent: string;
-  placeholder: string;
-  onContentChange: (content: string) => void;
-  onPaste: (event: React.ClipboardEvent) => void;
-  isFocusMode?: boolean;
-  isInIME?: boolean;
-  onCompositionStart?: () => void;
-  onCompositionEnd?: () => void;
+  /** Persisted toggle for the normal-mode formatting toolbar. */
+  isFormattingToolbarVisible?: boolean;
+  onToggleFormattingToolbar?: () => void;
 }
 
 export interface VisibilitySelectorProps {
   value: Visibility;
   onChange: (visibility: Visibility) => void;
   onOpenChange?: (open: boolean) => void;
+  /** "compact" renders a 13px trigger that blends into dense surfaces like the memo detail rail. */
+  size?: "default" | "compact";
 }

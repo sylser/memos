@@ -2,8 +2,6 @@ package v1
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -11,20 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/cel-go/cel"
-	"github.com/google/cel-go/common/ast"
 	"github.com/pkg/errors"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/usememos/memos/internal/util"
-	"github.com/usememos/memos/internal/webhook"
 	v1pb "github.com/usememos/memos/proto/gen/api/v1"
 	storepb "github.com/usememos/memos/proto/gen/store"
-	"github.com/usememos/memos/server/auth"
 	"github.com/usememos/memos/store"
 )
 
@@ -33,6 +25,29 @@ const maxBatchGetUsers = 100
 func validatePassword(password string) error {
 	if password == "" {
 		return errors.New("password must not be empty")
+	}
+	return nil
+}
+
+func validateUserTagsSetting(setting *v1pb.UserSetting_TagsSetting) error {
+	if setting == nil {
+		return errors.New("tags setting is required")
+	}
+	for tag, metadata := range setting.Tags {
+		if strings.TrimSpace(tag) == "" {
+			return errors.New("tag key cannot be empty")
+		}
+		if _, err := regexp.Compile(tag); err != nil {
+			return errors.Wrapf(err, "tag key %q is not a valid regex pattern", tag)
+		}
+		if metadata == nil {
+			return errors.Errorf("tag metadata is required for %q", tag)
+		}
+		if metadata.GetBackgroundColor() != nil {
+			if err := validateInstanceColor(metadata.GetBackgroundColor()); err != nil {
+				return errors.Wrapf(err, "background_color for %q", tag)
+			}
+		}
 	}
 	return nil
 }
@@ -61,16 +76,39 @@ func (s *APIV1Service) ListUsers(ctx context.Context, request *v1pb.ListUsersReq
 		}
 	}
 
+	var limit, offset int
+	if request.PageToken != "" {
+		var pageToken v1pb.PageToken
+		if err := unmarshalPageToken(request.PageToken, &pageToken); err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid page token: %v", err)
+		}
+		limit = normalizePageSize(pageToken.Limit)
+		offset = max(int(pageToken.Offset), 0)
+	} else {
+		limit = normalizePageSize(request.PageSize)
+	}
+	// Fetch one extra row to detect whether a subsequent page exists.
+	limitPlusOne := limit + 1
+	userFind.Limit = &limitPlusOne
+	userFind.Offset = &offset
+
 	users, err := s.Store.ListUsers(ctx, userFind)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list users: %v", err)
 	}
 
-	// TODO: Implement proper ordering, and pagination
-	// For now, return all users with basic structure
+	nextPageToken := ""
+	if len(users) == limitPlusOne {
+		users = users[:limit]
+		nextPageToken, err = getPageToken(limit, offset+limit)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to get next page token: %v", err)
+		}
+	}
+
 	response := &v1pb.ListUsersResponse{
-		Users:     []*v1pb.User{},
-		TotalSize: int32(len(users)),
+		Users:         make([]*v1pb.User, 0, len(users)),
+		NextPageToken: nextPageToken,
 	}
 	for _, user := range users {
 		response.Users = append(response.Users, convertUserFromStore(user, currentUser))
@@ -78,21 +116,22 @@ func (s *APIV1Service) ListUsers(ctx context.Context, request *v1pb.ListUsersReq
 	return response, nil
 }
 
-func normalizeBatchUsernames(usernames []string) []string {
+func uniqueBatchUsernames(usernames []string) ([]string, int) {
 	uniqueUsernames := make([]string, 0, len(usernames))
 	seen := make(map[string]struct{}, len(usernames))
+	nonEmptyCount := 0
 	for _, username := range usernames {
-		username = strings.TrimSpace(username)
-		if validateUsername(username) != nil {
+		if username == "" {
 			continue
 		}
+		nonEmptyCount++
 		if _, ok := seen[username]; ok {
 			continue
 		}
 		seen[username] = struct{}{}
 		uniqueUsernames = append(uniqueUsernames, username)
 	}
-	return uniqueUsernames
+	return uniqueUsernames, nonEmptyCount
 }
 
 func (s *APIV1Service) BatchGetUsers(ctx context.Context, request *v1pb.BatchGetUsersRequest) (*v1pb.BatchGetUsersResponse, error) {
@@ -100,8 +139,8 @@ func (s *APIV1Service) BatchGetUsers(ctx context.Context, request *v1pb.BatchGet
 		return &v1pb.BatchGetUsersResponse{Users: []*v1pb.User{}}, nil
 	}
 
-	uniqueUsernames := normalizeBatchUsernames(request.Usernames)
-	if len(uniqueUsernames) > maxBatchGetUsers {
+	uniqueUsernames, nonEmptyUsernameCount := uniqueBatchUsernames(request.Usernames)
+	if nonEmptyUsernameCount > maxBatchGetUsers {
 		return nil, status.Errorf(codes.InvalidArgument, "too many usernames (max %d)", maxBatchGetUsers)
 	}
 
@@ -144,18 +183,57 @@ func (s *APIV1Service) CreateUser(ctx context.Context, request *v1pb.CreateUserR
 	// Get current user (might be nil for unauthenticated requests)
 	currentUser, _ := s.fetchCurrentUser(ctx)
 
-	// Check if there are any existing users (for first-time setup detection)
-	limitOne := 1
-	allUsers, err := s.Store.ListUsers(ctx, &store.FindUser{Limit: &limitOne})
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to list users: %v", err)
+	if request.User == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "user is required")
 	}
-	isFirstUser := len(allUsers) == 0
+	if request.UserId != "" && request.UserId != request.User.Username {
+		return nil, status.Errorf(codes.InvalidArgument, "user_id must match user.username")
+	}
+	if err := validateWritableUsername(request.User.Username); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
+	if err := validatePassword(request.User.Password); err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
+	}
 
-	// Check registration settings FIRST (unless it's the very first user)
-	if !isFirstUser {
+	roleToAssign := store.RoleUser
+	if currentUser != nil && currentUser.Role == store.RoleAdmin {
+		// Authenticated ADMIN user can create users with any role specified in request
+		if request.User.Role != v1pb.User_ROLE_UNSPECIFIED {
+			roleToAssign = convertUserRoleToStore(request.User.Role)
+		}
+	} else {
+		limitOne := 1
+		allUsers, err := s.Store.ListUsers(ctx, &store.FindUser{Limit: &limitOne})
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "failed to list users: %v", err)
+		}
+		if len(allUsers) == 0 {
+			roleToAssign = store.RoleAdmin
+			if !request.ValidateOnly {
+				passwordHash, err := bcrypt.GenerateFromPassword([]byte(request.User.Password), bcrypt.DefaultCost)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "failed to generate password hash: %v", err)
+				}
+				user, created, err := s.Store.CreateUserIfNoUsers(ctx, &store.User{
+					Username:     request.User.Username,
+					Role:         store.RoleAdmin,
+					Email:        request.User.Email,
+					Nickname:     request.User.DisplayName,
+					PasswordHash: string(passwordHash),
+				})
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "failed to create first user: %v", err)
+				}
+				if created {
+					return convertUserFromStore(user, user), nil
+				}
+				roleToAssign = store.RoleUser
+			}
+		}
+
 		// Only allow user registration if it is enabled in the settings, or if the user is a superuser
-		if currentUser == nil || !isSuperUser(currentUser) {
+		if roleToAssign != store.RoleAdmin {
 			instanceGeneralSetting, err := s.Store.GetInstanceGeneralSetting(ctx)
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to get instance general setting, error: %v", err)
@@ -167,30 +245,6 @@ func (s *APIV1Service) CreateUser(ctx context.Context, request *v1pb.CreateUserR
 				return nil, status.Errorf(codes.PermissionDenied, "password signup is not allowed")
 			}
 		}
-	}
-
-	// Determine the role to assign
-	var roleToAssign store.Role
-	if isFirstUser {
-		// First-time setup: create the first user as ADMIN (no authentication required)
-		roleToAssign = store.RoleAdmin
-	} else if currentUser != nil && currentUser.Role == store.RoleAdmin {
-		// Authenticated ADMIN user can create users with any role specified in request
-		if request.User.Role != v1pb.User_ROLE_UNSPECIFIED {
-			roleToAssign = convertUserRoleToStore(request.User.Role)
-		} else {
-			roleToAssign = store.RoleUser
-		}
-	} else {
-		// Unauthenticated or non-ADMIN users can only create normal users
-		roleToAssign = store.RoleUser
-	}
-
-	if err := validateUsername(request.User.Username); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "invalid username: %s", request.User.Username)
-	}
-	if err := validatePassword(request.User.Password); err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 	}
 
 	// If validate_only is true, just validate without creating
@@ -224,6 +278,9 @@ func (s *APIV1Service) CreateUser(ctx context.Context, request *v1pb.CreateUserR
 }
 
 func (s *APIV1Service) UpdateUser(ctx context.Context, request *v1pb.UpdateUserRequest) (*v1pb.User, error) {
+	if request.User == nil {
+		return nil, status.Errorf(codes.InvalidArgument, "user is required")
+	}
 	if request.UpdateMask == nil || len(request.UpdateMask.Paths) == 0 {
 		return nil, status.Errorf(codes.InvalidArgument, "update mask is empty")
 	}
@@ -266,8 +323,8 @@ func (s *APIV1Service) UpdateUser(ctx context.Context, request *v1pb.UpdateUserR
 			if instanceGeneralSetting.DisallowChangeUsername {
 				return nil, status.Errorf(codes.PermissionDenied, "permission denied: disallow change username")
 			}
-			if err := validateUsername(request.User.Username); err != nil {
-				return nil, status.Errorf(codes.InvalidArgument, "invalid username: %s", request.User.Username)
+			if err := validateWritableUsername(request.User.Username); err != nil {
+				return nil, status.Errorf(codes.InvalidArgument, "%v", err)
 			}
 			update.Username = &request.User.Username
 		case "display_name":
@@ -317,6 +374,9 @@ func (s *APIV1Service) UpdateUser(ctx context.Context, request *v1pb.UpdateUserR
 			passwordHashStr := string(passwordHash)
 			update.PasswordHash = &passwordHashStr
 		case "state":
+			if currentUser.Role != store.RoleAdmin {
+				return nil, status.Errorf(codes.PermissionDenied, "permission denied")
+			}
 			rowStatus := convertStateToStore(request.User.State)
 			update.RowStatus = &rowStatus
 		default:
@@ -353,16 +413,24 @@ func (s *APIV1Service) DeleteUser(ctx context.Context, request *v1pb.DeleteUserR
 	}
 	isSelfDelete := currentUser.ID == userID
 
-	attachments, err := s.Store.DeleteUserCompletely(ctx, &store.DeleteUser{
+	deleteResult, err := s.Store.DeleteUser(ctx, &store.DeleteUser{
 		ID: user.ID,
 	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete user: %v", err)
 	}
+	attachments := deleteResult.Attachments
 	var attachmentCleanupErr error
 	failedAttachmentIDs := make([]int32, 0)
+	attachmentStorageSetting, attachmentStorageSettingErr := getDeleteUserAttachmentStorageSetting(ctx, s.Store, attachments)
 	for _, attachment := range attachments {
-		if err := s.Store.DeleteAttachmentStorage(ctx, attachment); err != nil {
+		var err error
+		if attachmentStorageSettingErr != nil && store.AttachmentNeedsInstanceStorageSetting(attachment) {
+			err = attachmentStorageSettingErr
+		} else {
+			err = s.Store.DeleteAttachmentStorageWithInstanceSetting(ctx, attachment, attachmentStorageSetting)
+		}
+		if err != nil {
 			slog.Warn("failed to delete attachment storage after deleting user", "user_id", userID, "attachment_id", attachment.ID, "error", err)
 			failedAttachmentIDs = append(failedAttachmentIDs, attachment.ID)
 			if attachmentCleanupErr == nil {
@@ -386,6 +454,19 @@ func (s *APIV1Service) DeleteUser(ctx context.Context, request *v1pb.DeleteUserR
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+func getDeleteUserAttachmentStorageSetting(ctx context.Context, stores *store.Store, attachments []*store.Attachment) (*storepb.InstanceStorageSetting, error) {
+	for _, attachment := range attachments {
+		if store.AttachmentNeedsInstanceStorageSetting(attachment) {
+			instanceStorageSetting, err := stores.GetInstanceStorageSetting(ctx)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to get instance storage setting")
+			}
+			return instanceStorageSetting, nil
+		}
+	}
+	return nil, nil
 }
 
 func getDefaultUserGeneralSetting() *v1pb.UserSetting_GeneralSetting {

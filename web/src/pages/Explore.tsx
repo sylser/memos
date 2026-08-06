@@ -1,5 +1,5 @@
 import MemoView from "@/components/MemoView";
-import PagedMemoList from "@/components/PagedMemoList";
+import PagedMemoList, { getMemoKey } from "@/components/PagedMemoList";
 import { useMemoFilters, useMemoSorting } from "@/hooks";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import { State } from "@/types/proto/api/v1/common_pb";
@@ -14,9 +14,8 @@ const Explore = () => {
   // Note: The backend is responsible for filtering stats based on visibility permissions.
   const visibilities = currentUser ? [Visibility.PUBLIC, Visibility.PROTECTED] : [Visibility.PUBLIC];
 
-  // Build filter using unified hook (no creator scoping for Explore)
   const memoFilter = useMemoFilters({
-    includeShortcuts: false,
+    includeShortcuts: true,
     includePinned: false,
     visibilities,
   });
@@ -29,7 +28,7 @@ const Explore = () => {
 
   return (
     <PagedMemoList
-      renderer={(memo: Memo) => <MemoView key={`${memo.name}-${memo.updateTime}`} memo={memo} showCreator showVisibility compact />}
+      renderer={(memo: Memo, { compact }) => <MemoView key={getMemoKey(memo)} memo={memo} showCreator showVisibility compact={compact} />}
       listSort={listSort}
       orderBy={orderBy}
       filter={memoFilter}

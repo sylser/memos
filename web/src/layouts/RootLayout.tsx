@@ -1,11 +1,12 @@
-import { useEffect } from "react";
-import { Outlet, useLocation, useSearchParams } from "react-router-dom";
-import usePrevious from "react-use/lib/usePrevious";
-import Navigation from "@/components/Navigation";
+import { useEffect, useRef } from "react";
+import { Navigate, Outlet, useLocation, useSearchParams } from "react-router-dom";
+import AppSidebar, { MobileAppHeader, MobileAppSidebar, QuickFindDialog } from "@/components/AppSidebar";
+import { AppSidebarProvider } from "@/contexts/AppSidebarContext";
 import { useInstance } from "@/contexts/InstanceContext";
-import { useMemoFilterContext } from "@/contexts/MemoFilterContext";
+import { MemoFilterProvider, useMemoFilterContext } from "@/contexts/MemoFilterContext";
+import useCurrentUser from "@/hooks/useCurrentUser";
 import useMediaQuery from "@/hooks/useMediaQuery";
-import { cn } from "@/lib/utils";
+import { buildAuthRoute, shouldGatePrivateInstance } from "@/utils/auth-redirect";
 import { useTranslate } from "@/utils/i18n";
 
 const MEMOS_DEPLOY_URL = "https://usememos.com/docs/deploy";
@@ -26,41 +27,59 @@ const DemoBanner = () => {
   );
 };
 
-const RootLayout = () => {
+const RootLayoutContent = () => {
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const sm = useMediaQuery("sm");
+  const currentUser = useCurrentUser();
+  const md = useMediaQuery("md");
   const { profile } = useInstance();
   const { removeFilter } = useMemoFilterContext();
   const { pathname } = location;
-  const prevPathname = usePrevious(pathname);
+  const prevPathnameRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
+    const prevPathname = prevPathnameRef.current;
+
     // When the route changes and there is no filter in the search params, remove all filters.
-    if (prevPathname !== pathname && !searchParams.has("filter")) {
+    if (prevPathname !== undefined && prevPathname !== pathname && !searchParams.has("filter")) {
       removeFilter(() => true);
     }
-  }, [prevPathname, pathname, searchParams, removeFilter]);
+
+    prevPathnameRef.current = pathname;
+  }, [pathname, searchParams, removeFilter]);
+
+  // Private instance (no InstanceURL configured): anonymous visitors may only reach
+  // share links; everything else redirects to the sign-in page, preserving the intended
+  // destination. Public instances keep the open Explore behavior for logged-out users.
+  if (shouldGatePrivateInstance({ isPrivateInstance: !profile.instanceUrl, isAuthenticated: !!currentUser, pathname })) {
+    const redirect = `${pathname}${location.search}${location.hash}`;
+    return <Navigate to={buildAuthRoute({ redirect })} replace />;
+  }
 
   return (
-    <div className="w-full min-h-full flex flex-row justify-center items-start sm:pl-16">
-      {sm && (
-        <div
-          className={cn(
-            "group flex flex-col justify-start items-start fixed top-0 left-0 select-none h-full bg-sidebar",
-            "w-16 px-2",
-            "border-r border-border",
-          )}
-        >
-          <Navigation className="py-4 md:pt-6" collapsed={true} />
-        </div>
-      )}
-      <main className="w-full h-auto grow shrink flex flex-col justify-start items-center">
-        {profile.demo && <DemoBanner />}
-        <Outlet />
-      </main>
-    </div>
+    <AppSidebarProvider>
+      <div className="min-h-full w-full bg-background">
+        {md && (
+          <div className="fixed inset-y-0 left-0 z-30 w-64 border-r border-border/70">
+            <AppSidebar />
+          </div>
+        )}
+        <MobileAppSidebar />
+        <main className="flex min-h-full w-full min-w-0 flex-col items-center md:pl-64">
+          <MobileAppHeader />
+          {profile.demo && <DemoBanner />}
+          <Outlet />
+        </main>
+        <QuickFindDialog />
+      </div>
+    </AppSidebarProvider>
   );
 };
+
+const RootLayout = () => (
+  <MemoFilterProvider>
+    <RootLayoutContent />
+  </MemoFilterProvider>
+);
 
 export default RootLayout;

@@ -1,4 +1,5 @@
 import { create } from "@bufbuild/protobuf";
+import { useMemo } from "react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,7 +13,7 @@ import LocaleSelect from "../LocaleSelect";
 import ThemeSelect from "../ThemeSelect";
 import VisibilityIcon from "../VisibilityIcon";
 import SettingGroup from "./SettingGroup";
-import SettingRow from "./SettingRow";
+import { SettingList, SettingListItem } from "./SettingList";
 import SettingSection from "./SettingSection";
 
 const IMAGE_COMPRESSION_QUALITY_STORAGE_KEY = "memos-image-compression-quality";
@@ -36,6 +37,15 @@ const PreferencesSection = () => {
       },
     );
   };
+
+  const visibilityOptions = useMemo(
+    () =>
+      [Visibility.PRIVATE, Visibility.PROTECTED, Visibility.PUBLIC].map((v) => {
+        const value = convertVisibilityToString(v);
+        return { value, label: t(`memo.visibility.${value.toLowerCase() as Lowercase<typeof value>}`) };
+      }),
+    [t],
+  );
 
   const handleDefaultMemoVisibilityChanged = (value: string) => {
     updateUserGeneralSetting(
@@ -91,50 +101,63 @@ const PreferencesSection = () => {
 
   return (
     <SettingSection title={t("setting.preference.label")}>
-      <SettingGroup title={t("common.basic")}>
-        <SettingRow label={t("common.language")}>
-          <LocaleSelect value={setting.locale} onChange={handleLocaleSelectChange} />
-        </SettingRow>
+      <SettingGroup title={t("setting.preference.appearance-title")} description={t("setting.preference.appearance-description")}>
+        <SettingList>
+          <SettingListItem label={t("common.language")} description={t("setting.preference.language-description")}>
+            <LocaleSelect value={setting.locale} onChange={handleLocaleSelectChange} />
+          </SettingListItem>
 
-        <SettingRow label={t("setting.preference.theme")}>
-          <ThemeSelect value={setting.theme} onValueChange={handleThemeChange} />
-        </SettingRow>
+          <SettingListItem label={t("setting.preference.theme")} description={t("setting.preference.theme-description")}>
+            <ThemeSelect value={setting.theme} onValueChange={handleThemeChange} />
+          </SettingListItem>
+        </SettingList>
       </SettingGroup>
 
-      <SettingGroup title={t("common.memo")} showSeparator>
-        <SettingRow label={t("setting.preference.default-memo-visibility")}>
-          <Select value={setting.memoVisibility || "PRIVATE"} onValueChange={handleDefaultMemoVisibilityChanged}>
-            <SelectTrigger className="min-w-fit">
-              <div className="flex items-center gap-2">
-                <VisibilityIcon visibility={convertVisibilityFromString(setting.memoVisibility)} />
-                <SelectValue />
-              </div>
-            </SelectTrigger>
-            <SelectContent>
-              {[Visibility.PRIVATE, Visibility.PROTECTED, Visibility.PUBLIC]
-                .map((v) => convertVisibilityToString(v))
-                .map((item) => (
-                  <SelectItem key={item} value={item} className="whitespace-nowrap">
-                    {t(`memo.visibility.${item.toLowerCase() as Lowercase<typeof item>}`)}
+      <SettingGroup
+        title={t("setting.preference.memo-defaults-title")}
+        description={t("setting.preference.memo-defaults-description")}
+        showSeparator
+      >
+        <SettingList>
+          <SettingListItem
+            label={t("setting.preference.default-memo-visibility")}
+            description={t("setting.preference.default-memo-visibility-description")}
+          >
+            <Select
+              value={setting.memoVisibility || "PRIVATE"}
+              items={visibilityOptions}
+              onValueChange={handleDefaultMemoVisibilityChanged}
+            >
+              <SelectTrigger className="min-w-fit">
+                <div className="flex items-center gap-2">
+                  <VisibilityIcon visibility={convertVisibilityFromString(setting.memoVisibility)} />
+                  <SelectValue />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                {visibilityOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value} className="whitespace-nowrap">
+                    {option.label}
                   </SelectItem>
                 ))}
-            </SelectContent>
-          </Select>
-        </SettingRow>
+              </SelectContent>
+            </Select>
+          </SettingListItem>
 
-        <SettingRow
-          label={t("setting.preference.image-compression-quality")}
-          tooltip={t("setting.preference.image-compression-quality-hint")}
-        >
-          <Input
-            className="w-24 font-mono"
-            type="number"
-            min={1}
-            max={100}
-            defaultValue={String(imageCompressionQuality)}
-            onBlur={(event) => handleImageCompressionQualityChanged(event.target.value)}
-          />
-        </SettingRow>
+          <SettingListItem
+            title={t("setting.preference.image-compression-quality")}
+            description={t("setting.preference.image-compression-quality-hint")}
+          >
+            <Input
+              className="w-24 font-mono"
+              type="number"
+              min={1}
+              max={100}
+              defaultValue={String(imageCompressionQuality)}
+              onBlur={(event) => handleImageCompressionQualityChanged(event.target.value)}
+            />
+          </SettingListItem>
+        </SettingList>
       </SettingGroup>
     </SettingSection>
   );

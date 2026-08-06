@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"strconv"
+
+	"github.com/pkg/errors"
 )
 
 // Role is the type of a role.
@@ -75,6 +77,8 @@ type FindUser struct {
 
 	// The maximum number of users to return.
 	Limit *int
+	// The offset of the returned users.
+	Offset *int
 }
 
 type DeleteUser struct {
@@ -93,6 +97,30 @@ func (s *Store) CreateUser(ctx context.Context, create *User) (*User, error) {
 
 	s.userCache.Set(ctx, userCacheKey(user.ID), user)
 	return user, nil
+}
+
+// CreateUserIfNoUsers creates a user only when the instance has no users.
+// The in-process lock prevents concurrent first-user setup requests from
+// creating multiple admins in the same server process.
+func (s *Store) CreateUserIfNoUsers(ctx context.Context, create *User) (*User, bool, error) {
+	s.userCreateMu.Lock()
+	defer s.userCreateMu.Unlock()
+
+	limitOne := 1
+	users, err := s.driver.ListUsers(ctx, &FindUser{Limit: &limitOne})
+	if err != nil {
+		return nil, false, err
+	}
+	if len(users) > 0 {
+		return nil, false, nil
+	}
+
+	user, err := s.driver.CreateUser(ctx, create)
+	if err != nil {
+		return nil, false, err
+	}
+	s.userCache.Set(ctx, userCacheKey(user.ID), user)
+	return user, true, nil
 }
 
 func (s *Store) UpdateUser(ctx context.Context, update *UpdateUser) (*User, error) {
@@ -140,11 +168,14 @@ func (s *Store) GetUser(ctx context.Context, find *FindUser) (*User, error) {
 	return user, nil
 }
 
-func (s *Store) DeleteUser(ctx context.Context, delete *DeleteUser) error {
-	err := s.driver.DeleteUser(ctx, delete)
+func (s *Store) DeleteUser(ctx context.Context, delete *DeleteUser) (*DeleteUserResult, error) {
+	result, err := s.driver.DeleteUser(ctx, delete)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	s.userCache.Delete(ctx, userCacheKey(delete.ID))
-	return nil
+	if result == nil {
+		return nil, errors.New("unexpected nil delete user result")
+	}
+	s.deleteUserCache(ctx, delete.ID, result)
+	return result, nil
 }

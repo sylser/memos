@@ -1,5 +1,5 @@
 import { uniqBy } from "lodash-es";
-import { createContext, type ReactNode, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 export type FilterFactor =
@@ -23,7 +23,9 @@ export const parseFilterQuery = (query: string | null): MemoFilter[] => {
   if (!query) return [];
   try {
     return query.split(",").map((filterStr) => {
-      const [factor, value] = filterStr.split(":");
+      const separatorIndex = filterStr.indexOf(":");
+      const factor = separatorIndex === -1 ? filterStr : filterStr.slice(0, separatorIndex);
+      const value = separatorIndex === -1 ? "" : filterStr.slice(separatorIndex + 1);
       return {
         factor: factor as FilterFactor,
         value: decodeURIComponent(value || ""),
@@ -37,6 +39,11 @@ export const parseFilterQuery = (query: string | null): MemoFilter[] => {
 export const stringifyFilters = (filters: MemoFilter[]): string => {
   return filters.map((filter) => `${filter.factor}:${encodeURIComponent(filter.value)}`).join(",");
 };
+
+export const replaceFiltersByFactor = (filters: MemoFilter[], factor: FilterFactor, replacements: MemoFilter[]): MemoFilter[] => [
+  ...filters.filter((filter) => filter.factor !== factor),
+  ...replacements,
+];
 
 interface MemoFilterContextValue {
   filters: MemoFilter[];
@@ -117,35 +124,41 @@ export function MemoFilterProvider({ children }: { children: ReactNode }) {
 
   const setShortcut = useCallback((newShortcut?: string) => {
     setShortcutState(newShortcut);
-    // Clear content search filter when selecting a shortcut (issue #5462)
-    if (newShortcut !== undefined) {
-      setFiltersState((prev) => prev.filter((f) => f.factor !== "contentSearch"));
-    }
   }, []);
 
   const hasFilter = useCallback((filter: MemoFilter) => filters.some((f) => getMemoFilterKey(f) === getMemoFilterKey(filter)), [filters]);
 
   const hasActiveFilters = filters.length > 0 || shortcut !== undefined;
-
-  return (
-    <MemoFilterContext.Provider
-      value={{
-        filters,
-        shortcut,
-        hasActiveFilters,
-        getFiltersByFactor,
-        setFilters,
-        addFilter,
-        removeFilter,
-        removeFiltersByFactor,
-        clearAllFilters,
-        setShortcut,
-        hasFilter,
-      }}
-    >
-      {children}
-    </MemoFilterContext.Provider>
+  const value = useMemo(
+    () => ({
+      filters,
+      shortcut,
+      hasActiveFilters,
+      getFiltersByFactor,
+      setFilters,
+      addFilter,
+      removeFilter,
+      removeFiltersByFactor,
+      clearAllFilters,
+      setShortcut,
+      hasFilter,
+    }),
+    [
+      filters,
+      shortcut,
+      hasActiveFilters,
+      getFiltersByFactor,
+      setFilters,
+      addFilter,
+      removeFilter,
+      removeFiltersByFactor,
+      clearAllFilters,
+      setShortcut,
+      hasFilter,
+    ],
   );
+
+  return <MemoFilterContext.Provider value={value}>{children}</MemoFilterContext.Provider>;
 }
 
 export function useMemoFilterContext() {

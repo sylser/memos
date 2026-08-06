@@ -1,5 +1,6 @@
 import { timestampDate } from "@bufbuild/protobuf/wkt";
 import L, { DivIcon } from "leaflet";
+import "leaflet/dist/leaflet.css";
 import "leaflet.markercluster/dist/MarkerCluster.css";
 import { ArrowUpRightIcon, MapPinIcon } from "lucide-react";
 import { useEffect, useMemo } from "react";
@@ -7,8 +8,8 @@ import { MapContainer, Marker, Popup, useMap } from "react-leaflet";
 import MarkerClusterGroup from "react-leaflet-cluster";
 import { Link } from "react-router-dom";
 import { defaultMarkerIcon, ThemedTileLayer } from "@/components/map/map-utils";
-import { buildMemoCreatorFilter } from "@/helpers/resource-names";
 import { useInfiniteMemos } from "@/hooks/useMemoQueries";
+import { buildMemoCreatorFilter } from "@/lib/resource-names";
 import { cn } from "@/lib/utils";
 import { State } from "@/types/proto/api/v1/common_pb";
 import { Memo } from "@/types/proto/api/v1/memo_service_pb";
@@ -52,7 +53,7 @@ const UserMemoMap = ({ creator, className }: Props) => {
   const { data, isLoading } = useInfiniteMemos(
     {
       state: State.NORMAL,
-      orderBy: "display_time desc",
+      orderBy: "create_time desc",
       pageSize: 1000,
       filter: creatorFilter,
     },
@@ -133,8 +134,8 @@ const UserMemoMap = ({ creator, className }: Props) => {
                         Memo
                       </span>
                       <span className="block text-[11px] font-medium text-muted-foreground">
-                        {memo.displayTime &&
-                          timestampDate(memo.displayTime).toLocaleDateString(undefined, {
+                        {memo.createTime &&
+                          timestampDate(memo.createTime).toLocaleDateString(undefined, {
                             year: "numeric",
                             month: "short",
                             day: "numeric",

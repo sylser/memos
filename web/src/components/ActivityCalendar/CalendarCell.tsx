@@ -18,7 +18,7 @@ export const CalendarCell = memo((props: CalendarCellProps) => {
   const { day, maxCount, tooltipText, onClick, size = "default", disableTooltip = false } = props;
 
   const handleClick = () => {
-    if (day.count > 0 && onClick) {
+    if (onClick) {
       onClick(day.date);
     }
   };
@@ -27,25 +27,28 @@ export const CalendarCell = memo((props: CalendarCellProps) => {
   const smallExtraClasses = size === "small" ? `${SMALL_CELL_SIZE.dimensions} min-h-0` : "";
 
   const baseClasses = cn(
-    "aspect-square w-full flex items-center justify-center text-center transition-all duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 select-none border border-border/10 bg-muted/20",
+    "relative aspect-square w-full flex items-center justify-center text-center transition-[background-color,color,filter,box-shadow] duration-150 ease-out select-none",
     sizeConfig.font,
     sizeConfig.borderRadius,
     smallExtraClasses,
   );
-  const isInteractive = Boolean(onClick && day.count > 0);
+  const isInteractive = Boolean(onClick);
   const ariaLabel = day.isSelected ? `${tooltipText} (selected)` : tooltipText;
 
   if (!day.isCurrentMonth) {
-    return <div className={cn(baseClasses, "text-muted-foreground/30 bg-transparent border-transparent cursor-default")}>{day.label}</div>;
+    return <div className={cn(baseClasses, "text-muted-foreground/25 bg-transparent cursor-default")}>{day.label}</div>;
   }
 
   const intensityClass = getCellIntensityClass(day, maxCount);
 
   const buttonClasses = cn(
+    "h-auto p-0",
     baseClasses,
     intensityClass,
     getCalendarCellStateClass(day),
-    isInteractive ? "cursor-pointer hover:bg-muted/40 hover:border-border/30" : "cursor-default",
+    isInteractive
+      ? "cursor-pointer hover:brightness-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-inset"
+      : "cursor-default",
   );
 
   const button = (
@@ -59,10 +62,16 @@ export const CalendarCell = memo((props: CalendarCellProps) => {
       className={buttonClasses}
     >
       {day.label}
+      {day.isToday && (
+        <span
+          aria-hidden="true"
+          className="absolute bottom-[3px] left-1/2 size-[3px] -translate-x-1/2 rounded-full bg-blue-600/80 dark:bg-blue-300/80"
+        />
+      )}
     </button>
   );
 
-  const shouldShowTooltip = tooltipText && day.count > 0 && !disableTooltip;
+  const shouldShowTooltip = day.count > 0 && tooltipText && !disableTooltip;
 
   if (!shouldShowTooltip) {
     return button;
@@ -70,7 +79,7 @@ export const CalendarCell = memo((props: CalendarCellProps) => {
 
   return (
     <Tooltip>
-      <TooltipTrigger asChild>{button}</TooltipTrigger>
+      <TooltipTrigger render={button} />
       <TooltipContent side="top">
         <p>{tooltipText}</p>
       </TooltipContent>

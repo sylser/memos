@@ -1,28 +1,47 @@
 import { Navigate, Outlet, useLocation, useSearchParams } from "react-router-dom";
+import { useAuth } from "@/contexts/AuthContext";
+import { useInstance } from "@/contexts/InstanceContext";
 import useCurrentUser from "@/hooks/useCurrentUser";
 import { AUTH_REDIRECT_PARAM, buildAuthRoute, getSafeRedirectPath } from "@/utils/auth-redirect";
 import { ROUTES } from "./routes";
 
+/** Waits for instance settings used by public/auth pages to settle. */
+export const RequireInstanceInitializationRoute = () => {
+  const { isInitialized } = useInstance();
+  return isInitialized ? <Outlet /> : null;
+};
+
+/** Keeps non-feed authenticated pages behind all display-sensitive settings. */
+export const RequireFullInitializationRoute = () => {
+  const { isInitialized: authInitialized } = useAuth();
+  const { isInitialized: instanceInitialized } = useInstance();
+  return authInitialized && instanceInitialized ? <Outlet /> : null;
+};
+
 /**
- * Entry-route component mounted at `/`. Performs authentication-aware redirection
- * to the correct landing page before any business UI renders, preserving the
- * original query string and hash so bookmarks like `/?filter=foo` keep working.
+ * Index-route gate mounted at `/`. Authenticated visitors fall through to the
+ * nested Home page; unauthenticated visitors are redirected to `/explore`,
+ * preserving the original query string and hash so bookmarks like `/?filter=foo`
+ * keep working.
  */
 export const LandingRoute = () => {
   const currentUser = useCurrentUser();
   const location = useLocation();
-  const target = currentUser ? ROUTES.HOME : ROUTES.EXPLORE;
 
-  return (
-    <Navigate
-      to={{
-        pathname: target,
-        search: location.search,
-        hash: location.hash,
-      }}
-      replace
-    />
-  );
+  if (!currentUser) {
+    return (
+      <Navigate
+        to={{
+          pathname: ROUTES.EXPLORE,
+          search: location.search,
+          hash: location.hash,
+        }}
+        replace
+      />
+    );
+  }
+
+  return <Outlet />;
 };
 
 /**
@@ -44,7 +63,7 @@ export const RequireAuthRoute = () => {
 
 /**
  * Guard for guest-only routes (sign-in and sign-up). Already-authenticated users
- * are redirected to the requested `redirect` target (when safe) or to `/home`.
+ * are redirected to the requested `redirect` target (when safe) or to `/`.
  *
  * The OAuth callback route (`/auth/callback`) intentionally opts out of this guard:
  * an authenticated session in another tab must not prevent the callback from

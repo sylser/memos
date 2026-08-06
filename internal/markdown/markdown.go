@@ -2,6 +2,8 @@ package markdown
 
 import (
 	"bytes"
+	"cmp"
+	"slices"
 	"strings"
 
 	"github.com/yuin/goldmark"
@@ -89,7 +91,10 @@ func NewService(opts ...Option) Service {
 	}
 
 	exts := []goldmark.Extender{
-		extension.GFM, // GitHub Flavored Markdown (tables, strikethrough, task lists, autolinks)
+		extension.Table,
+		extension.Strikethrough,
+		extension.TaskList,
+		extensions.NewGFMLinkify(),
 	}
 
 	// Add custom extensions based on config
@@ -116,7 +121,41 @@ func NewService(opts ...Option) Service {
 func (s *service) parse(content []byte) (gast.Node, error) {
 	reader := text.NewReader(content)
 	doc := s.md.Parser().Parse(reader)
+	if masked := maskInvalidLinkReferenceDefinitions(doc, content); masked != nil {
+		doc = s.md.Parser().Parse(text.NewReader(masked))
+	}
 	return doc, nil
+}
+
+func isTagNodeInLinkOrImage(n gast.Node) bool {
+	for parent := n.Parent(); parent != nil; parent = parent.Parent() {
+		switch parent.Kind() {
+		case gast.KindLink, gast.KindImage:
+			return true
+		default:
+			// Keep walking ancestors.
+		}
+	}
+	return false
+}
+
+func asMemoTagNode(n gast.Node) (*mast.TagNode, bool) {
+	tagNode, ok := n.(*mast.TagNode)
+	if !ok || isTagNodeInLinkOrImage(n) {
+		return nil, false
+	}
+	return tagNode, true
+}
+
+func appendTagHierarchy(tags []string, value string) []string {
+	for offset := 0; ; {
+		separator := strings.IndexByte(value[offset:], '/')
+		if separator < 0 {
+			return append(tags, value)
+		}
+		offset += separator + 1
+		tags = append(tags, value[:offset-1])
+	}
 }
 
 // ExtractTags returns all #tags found in content.
@@ -127,16 +166,14 @@ func (s *service) ExtractTags(content []byte) ([]string, error) {
 	}
 
 	var tags []string
-
 	// Walk the AST to find tag nodes
 	err = gast.Walk(root, func(n gast.Node, entering bool) (gast.WalkStatus, error) {
 		if !entering {
 			return gast.WalkContinue, nil
 		}
 
-		// Check for custom TagNode
-		if tagNode, ok := n.(*mast.TagNode); ok {
-			tags = append(tags, string(tagNode.Tag))
+		if tagNode, ok := asMemoTagNode(n); ok {
+			tags = appendTagHierarchy(tags, string(tagNode.Tag))
 		}
 
 		return gast.WalkContinue, nil
@@ -163,6 +200,14 @@ func extractHeadingText(n gast.Node, source []byte) string {
 func extractTextFromNode(n gast.Node, source []byte, buf *strings.Builder) {
 	if textNode, ok := n.(*gast.Text); ok {
 		buf.Write(textNode.Segment.Value(source))
+		return
+	}
+	if mathNode, ok := n.(*mast.InlineMathNode); ok {
+		buf.Write(mathNode.Source)
+		return
+	}
+	if emailNode, ok := n.(*mast.GFMEmailNode); ok {
+		buf.Write(emailNode.Address)
 		return
 	}
 	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
@@ -194,7 +239,7 @@ func (s *service) ExtractProperties(content []byte) (*storepb.MemoPayload_Proper
 		}
 
 		switch n.Kind() {
-		case gast.KindLink:
+		case gast.KindLink, gast.KindAutoLink, mast.KindGFMEmail:
 			prop.HasLink = true
 
 		case gast.KindCodeBlock, gast.KindFencedCodeBlock, gast.KindCodeSpan:
@@ -234,8 +279,13 @@ func (s *service) RenderMarkdown(content []byte) (string, error) {
 
 // RenderHTML renders markdown content to HTML using goldmark's built-in HTML renderer.
 func (s *service) RenderHTML(content []byte) (string, error) {
+	root, err := s.parse(content)
+	if err != nil {
+		return "", err
+	}
+
 	var buf bytes.Buffer
-	if err := s.md.Convert(content, &buf); err != nil {
+	if err := s.md.Renderer().Render(&buf, content, root); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
@@ -297,8 +347,19 @@ func (s *service) GenerateSnippet(content []byte, maxLength int) (string, error)
 			buf.Write(node.URL(content))
 			return gast.WalkSkipChildren, nil
 		case *mast.TagNode:
-			buf.WriteByte('#')
-			buf.Write(node.Tag)
+			if len(node.Source) > 0 {
+				buf.Write(node.Source)
+			} else {
+				buf.WriteByte('#')
+				buf.Write(node.Tag)
+			}
+		case *mast.GFMEmailNode:
+			buf.Write(node.Address)
+		case *mast.InlineMathNode:
+			buf.Write(node.Source)
+		case *mast.BlockMathNode:
+			buf.Write(node.Source)
+			return gast.WalkSkipChildren, nil
 		default:
 			// Ignore other node types.
 		}
@@ -347,19 +408,17 @@ func (s *service) ExtractAll(content []byte) (*ExtractedData, error) {
 	}
 
 	firstBlockChecked := false
-
 	// Single walk to collect all data
 	err = gast.Walk(root, func(n gast.Node, entering bool) (gast.WalkStatus, error) {
 		if !entering {
 			return gast.WalkContinue, nil
 		}
 
-		// Extract tags
-		if tagNode, ok := n.(*mast.TagNode); ok {
-			data.Tags = append(data.Tags, string(tagNode.Tag))
+		if tagNode, ok := asMemoTagNode(n); ok {
+			data.Tags = appendTagHierarchy(data.Tags, string(tagNode.Tag))
 		}
 		if mentionNode, ok := n.(*mast.MentionNode); ok {
-			data.Mentions = append(data.Mentions, strings.ToLower(string(mentionNode.Username)))
+			data.Mentions = append(data.Mentions, string(mentionNode.Username))
 		}
 
 		// Check if the first block-level child of the document is an H1 heading.
@@ -372,7 +431,7 @@ func (s *service) ExtractAll(content []byte) (*ExtractedData, error) {
 
 		// Extract properties based on node kind
 		switch n.Kind() {
-		case gast.KindLink:
+		case gast.KindLink, gast.KindAutoLink, mast.KindGFMEmail:
 			data.Property.HasLink = true
 
 		case gast.KindCodeBlock, gast.KindFencedCodeBlock, gast.KindCodeSpan:
@@ -410,16 +469,19 @@ func (s *service) RenameTag(content []byte, oldTag, newTag string) (string, erro
 		return "", err
 	}
 
-	// Walk the AST to find and rename tag nodes
+	type sourceRange struct {
+		start int
+		end   int
+	}
+	var ranges []sourceRange
 	err = gast.Walk(root, func(n gast.Node, entering bool) (gast.WalkStatus, error) {
 		if !entering {
 			return gast.WalkContinue, nil
 		}
 
-		// Check for custom TagNode and rename if it matches
-		if tagNode, ok := n.(*mast.TagNode); ok {
-			if string(tagNode.Tag) == oldTag {
-				tagNode.Tag = []byte(newTag)
+		if tagNode, ok := asMemoTagNode(n); ok {
+			if string(tagNode.Tag) == oldTag && len(tagNode.Source) > 0 {
+				ranges = append(ranges, sourceRange{start: tagNode.Pos(), end: tagNode.Pos() + len(tagNode.Source)})
 			}
 		}
 
@@ -430,9 +492,18 @@ func (s *service) RenameTag(content []byte, oldTag, newTag string) (string, erro
 		return "", err
 	}
 
-	// Render back to markdown using the already-parsed AST
-	mdRenderer := renderer.NewMarkdownRenderer()
-	return mdRenderer.Render(root, content), nil
+	slices.SortFunc(ranges, func(left, right sourceRange) int { return cmp.Compare(left.start, right.start) })
+	var output bytes.Buffer
+	output.Grow(len(content))
+	cursor := 0
+	for _, sourceRange := range ranges {
+		output.Write(content[cursor:sourceRange.start])
+		output.WriteByte('#')
+		output.WriteString(newTag)
+		cursor = sourceRange.end
+	}
+	output.Write(content[cursor:])
+	return output.String(), nil
 }
 
 // uniquePreserveCase returns unique strings from input while preserving case.

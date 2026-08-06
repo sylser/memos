@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.1"
+  GO_VERSION: "1.26.2"
 
 jobs:
   static-checks:
@@ -69,6 +69,8 @@ jobs:
               go test -v -coverprofile=coverage.out -covermode=atomic ./store/...
               ;;
             server)
+              # Includes ./server/test, which boots the real server via
+              # server.NewServer and smokes every router it mounts.
               go test -v -race -coverprofile=coverage.out -covermode=atomic ./server/...
               ;;
             internal)

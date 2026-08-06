@@ -70,6 +70,10 @@ func (s *RSSService) RegisterRoutes(g *echo.Group) {
 }
 
 func (s *RSSService) GetExploreRSS(c *echo.Context) error {
+	if s.Profile == nil || !s.Profile.AllowAnonymous() {
+		return echo.NewHTTPError(http.StatusNotFound, "RSS is unavailable")
+	}
+
 	ctx := c.Request().Context()
 	cacheKey := "explore"
 
@@ -86,9 +90,10 @@ func (s *RSSService) GetExploreRSS(c *echo.Context) error {
 	normalStatus := store.Normal
 	limit := maxRSSItemCount
 	memoFind := store.FindMemo{
-		RowStatus:      &normalStatus,
-		VisibilityList: []store.Visibility{store.Public},
-		Limit:          &limit,
+		RowStatus:       &normalStatus,
+		VisibilityList:  []store.Visibility{store.Public},
+		ExcludeComments: true,
+		Limit:           &limit,
 	}
 	memoList, err := s.Store.ListMemos(ctx, &memoFind)
 	if err != nil {
@@ -108,6 +113,10 @@ func (s *RSSService) GetExploreRSS(c *echo.Context) error {
 }
 
 func (s *RSSService) GetUserRSS(c *echo.Context) error {
+	if s.Profile == nil || !s.Profile.AllowAnonymous() {
+		return echo.NewHTTPError(http.StatusNotFound, "RSS is unavailable")
+	}
+
 	ctx := c.Request().Context()
 	username := c.Param("username")
 	cacheKey := "user:" + username
@@ -135,10 +144,11 @@ func (s *RSSService) GetUserRSS(c *echo.Context) error {
 	normalStatus := store.Normal
 	limit := maxRSSItemCount
 	memoFind := store.FindMemo{
-		CreatorID:      &user.ID,
-		RowStatus:      &normalStatus,
-		VisibilityList: []store.Visibility{store.Public},
-		Limit:          &limit,
+		CreatorID:       &user.ID,
+		RowStatus:       &normalStatus,
+		VisibilityList:  []store.Visibility{store.Public},
+		ExcludeComments: true,
+		Limit:           &limit,
 	}
 	memoList, err := s.Store.ListMemos(ctx, &memoFind)
 	if err != nil {

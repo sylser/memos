@@ -1,13 +1,21 @@
-import { create } from "@bufbuild/protobuf";
-import { timestampDate } from "@bufbuild/protobuf/wkt";
-import { isEqual } from "lodash-es";
-import { CheckCircleIcon, ChevronRightIcon, Code2Icon, HashIcon, ImageIcon, LinkIcon, type LucideIcon, Share2Icon } from "lucide-react";
+import copy from "copy-to-clipboard";
+import { BookmarkCheckIcon, BookmarkIcon, ChevronDownIcon, ImageIcon, LinkIcon, Share2Icon } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
+import toast from "react-hot-toast";
+import { Link } from "react-router-dom";
+import SidebarRow, { SIDEBAR_ROW_CLASSES, SIDEBAR_ROW_ICON_CLASSES } from "@/components/AppSidebar/SidebarRow";
+import SidebarSectionHeader from "@/components/AppSidebar/SidebarSectionHeader";
+import { getRelationBuckets, getRelationMemo } from "@/components/MemoMetadata/Relation/relationHelpers";
+import { useResolvedRelationMemos } from "@/components/MemoMetadata/Relation/useResolvedRelationMemos";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { useInstance } from "@/contexts/InstanceContext";
+import { useOverflowTitle } from "@/hooks";
 import useCurrentUser from "@/hooks/useCurrentUser";
+import { useUpdateMemo } from "@/hooks/useMemoQueries";
 import { cn } from "@/lib/utils";
-import { Memo, Memo_PropertySchema } from "@/types/proto/api/v1/memo_service_pb";
-import { type Translations, useTranslate } from "@/utils/i18n";
+import { State } from "@/types/proto/api/v1/common_pb";
+import { Memo, type MemoRelation } from "@/types/proto/api/v1/memo_service_pb";
+import { useTranslate } from "@/utils/i18n";
 import { extractHeadings } from "@/utils/markdown-manipulation";
 import { isSuperUser } from "@/utils/user";
 import MemoOutline from "./MemoOutline";
@@ -17,122 +25,141 @@ interface Props {
   memo: Memo;
   className?: string;
   onShareImageOpen?: () => void;
+  forceReadonly?: boolean;
 }
 
-interface PropertyBadge {
-  icon: LucideIcon;
-  labelKey: Translations;
-}
-
-const SidebarSection = ({ label, count, children }: { label: string; count?: number; children: React.ReactNode }) => (
-  <div className="w-full space-y-2">
-    <div className="flex items-center gap-1.5">
-      <p className="text-xs font-medium text-muted-foreground/50 uppercase tracking-wider">{label}</p>
-      {count != null && <span className="text-xs text-muted-foreground/30">({count})</span>}
-    </div>
-    {children}
-  </div>
+const Section = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <section className="w-full">
+    <SidebarSectionHeader>{label}</SidebarSectionHeader>
+    <div className="space-y-0.5">{children}</div>
+  </section>
 );
 
-const PROPERTY_BADGE_CLASSES =
-  "inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border/60 bg-muted/60 text-xs text-muted-foreground";
-
-const TAG_BADGE_CLASSES =
-  "inline-flex items-center gap-1 px-1 rounded-md border border-border/60 bg-muted/60 text-sm text-muted-foreground hover:bg-muted hover:text-foreground/80 transition-colors cursor-pointer";
-
-const SHARE_ACTION_ROW_CLASSES =
-  "h-auto min-h-0 w-full justify-between rounded-none px-2 py-1.5 text-xs font-normal leading-tight text-muted-foreground transition-colors hover:bg-muted/40 hover:text-muted-foreground focus-visible:ring-offset-0 gap-1.5";
-
-const MemoDetailSidebar = ({ memo, className, onShareImageOpen }: Props) => {
-  const t = useTranslate();
-  const currentUser = useCurrentUser();
-  const [sharePanelOpen, setSharePanelOpen] = useState(false);
-  const property = create(Memo_PropertySchema, memo.property || {});
-  const canManageShares = !memo.parent && (memo.creator === currentUser?.name || isSuperUser(currentUser));
-  const hasUpdated = !isEqual(memo.createTime, memo.updateTime);
-  const headings = useMemo(() => extractHeadings(memo.content), [memo.content]);
-
-  const propertyBadges = useMemo(() => {
-    const badges: PropertyBadge[] = [];
-    if (property.hasLink) badges.push({ icon: LinkIcon, labelKey: "memo.links" });
-    if (property.hasTaskList) badges.push({ icon: CheckCircleIcon, labelKey: "memo.to-do" });
-    if (property.hasCode) badges.push({ icon: Code2Icon, labelKey: "memo.code" });
-    return badges;
-  }, [property.hasLink, property.hasTaskList, property.hasCode]);
+const BacklinkRow = ({ relation, snippet }: { relation: MemoRelation; snippet: string }) => {
+  const { ref, title } = useOverflowTitle<HTMLSpanElement>(snippet);
+  const relatedMemo = getRelationMemo(relation, "referenced");
+  if (!relatedMemo) {
+    return null;
+  }
 
   return (
-    <aside className={cn("relative w-full h-auto max-h-screen overflow-auto flex flex-col gap-5", className)}>
-      {headings.length > 0 && (
-        <SidebarSection label={t("memo.outline")}>
-          <MemoOutline headings={headings} />
-        </SidebarSection>
-      )}
+    <Link
+      className={cn(SIDEBAR_ROW_CLASSES, "text-muted-foreground hover:bg-sidebar-accent/65 hover:text-foreground")}
+      to={`/${relatedMemo.name}`}
+      title={title}
+      viewTransition
+    >
+      <LinkIcon className={SIDEBAR_ROW_ICON_CLASSES} strokeWidth={1.8} />
+      <span ref={ref} className="min-w-0 flex-1 truncate text-left">
+        {snippet}
+      </span>
+    </Link>
+  );
+};
 
-      {(canManageShares || onShareImageOpen) && (
-        <SidebarSection label={t("memo.share.section-label")}>
-          <div className="overflow-hidden rounded-md border border-border/50 bg-muted/20">
+const MemoDetailSidebar = ({ memo, className, onShareImageOpen, forceReadonly = false }: Props) => {
+  const t = useTranslate();
+  const currentUser = useCurrentUser();
+  const { profile } = useInstance();
+  const { mutateAsync: updateMemo } = useUpdateMemo();
+  const [sharePanelOpen, setSharePanelOpen] = useState(false);
+
+  const readonly = forceReadonly || (memo.creator !== currentUser?.name && !isSuperUser(currentUser));
+  const canPin = !readonly && !memo.parent && memo.state === State.NORMAL;
+  const canManageShares = !forceReadonly && !memo.parent && (memo.creator === currentUser?.name || isSuperUser(currentUser));
+
+  const headings = useMemo(() => extractHeadings(memo.content), [memo.content]);
+  const { referenced } = useMemo(() => getRelationBuckets(memo.relations, memo.name), [memo.relations, memo.name]);
+  const backlinkMemoNames = useMemo(
+    () =>
+      forceReadonly
+        ? []
+        : referenced.flatMap((relation) => {
+            const relatedMemo = getRelationMemo(relation, "referenced");
+            return relatedMemo?.name && !relatedMemo.snippet ? [relatedMemo.name] : [];
+          }),
+    [forceReadonly, referenced],
+  );
+  const resolvedMemos = useResolvedRelationMemos(backlinkMemoNames);
+
+  const backlinkSnippet = (relation: MemoRelation) => {
+    const relatedMemo = getRelationMemo(relation, "referenced");
+    if (!relatedMemo) {
+      return "";
+    }
+    return relatedMemo.snippet || resolvedMemos[relatedMemo.name]?.snippet || relatedMemo.name;
+  };
+
+  const handleTogglePin = async () => {
+    await updateMemo({ update: { name: memo.name, pinned: !memo.pinned }, updateMask: ["pinned"] });
+  };
+
+  const handleCopyLink = () => {
+    const host = profile.instanceUrl || window.location.origin;
+    copy(`${host}/${memo.name}`);
+    toast.success(t("message.succeed-copy-link"));
+  };
+
+  return (
+    <div className={cn("relative flex w-full select-none flex-col gap-3.5", className)}>
+      <Section label={t("common.actions")}>
+        {canPin && (
+          <SidebarRow
+            icon={memo.pinned ? BookmarkCheckIcon : BookmarkIcon}
+            label={memo.pinned ? t("common.unpin") : t("common.pin")}
+            onClick={handleTogglePin}
+          />
+        )}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            aria-label={t("common.share")}
+            className={cn(
+              SIDEBAR_ROW_CLASSES,
+              "text-muted-foreground hover:bg-sidebar-accent/65 hover:text-foreground data-popup-open:bg-sidebar-accent/65 data-popup-open:text-foreground",
+            )}
+          >
+            <Share2Icon className={SIDEBAR_ROW_ICON_CLASSES} strokeWidth={1.8} />
+            <span className="min-w-0 flex-1 truncate text-left">{t("common.share")}</span>
+            <ChevronDownIcon className="size-3.5 shrink-0 opacity-55" strokeWidth={1.8} />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={4} className="w-48">
+            <DropdownMenuItem onClick={handleCopyLink}>
+              <LinkIcon />
+              {t("memo.copy-link")}
+            </DropdownMenuItem>
             {onShareImageOpen && (
-              <Button variant="ghost" size="sm" className={SHARE_ACTION_ROW_CLASSES} onClick={onShareImageOpen}>
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <ImageIcon className="size-3.5 shrink-0 text-muted-foreground/90" />
-                  <span className="truncate">{t("memo.share.open-image")}</span>
-                </span>
-                <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/35" />
-              </Button>
+              <DropdownMenuItem onClick={onShareImageOpen}>
+                <ImageIcon />
+                {t("memo.share.open-image")}
+              </DropdownMenuItem>
             )}
-            {onShareImageOpen && canManageShares && <div className="border-t border-border/50" />}
             {canManageShares && (
-              <Button variant="ghost" size="sm" className={SHARE_ACTION_ROW_CLASSES} onClick={() => setSharePanelOpen(true)}>
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <Share2Icon className="size-3.5 shrink-0 text-muted-foreground/90" />
-                  <span className="truncate">{t("memo.share.open-panel")}</span>
-                </span>
-                <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/35" />
-              </Button>
+              <DropdownMenuItem onClick={() => setSharePanelOpen(true)}>
+                <Share2Icon />
+                {t("memo.share.open-panel")}
+              </DropdownMenuItem>
             )}
-          </div>
-        </SidebarSection>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </Section>
+
+      {headings.length > 1 && (
+        <Section label={t("memo.outline")}>
+          <MemoOutline headings={headings} />
+        </Section>
       )}
 
-      <SidebarSection label={t("common.created-at")}>
-        <div className="flex flex-col gap-1">
-          <p className="text-sm text-foreground/70">{memo.createTime ? timestampDate(memo.createTime).toLocaleString() : "—"}</p>
-          {hasUpdated && (
-            <p className="text-xs text-muted-foreground">
-              {t("common.last-updated-at")}: {memo.updateTime ? timestampDate(memo.updateTime).toLocaleString() : "—"}
-            </p>
-          )}
-        </div>
-      </SidebarSection>
-
-      {propertyBadges.length > 0 && (
-        <SidebarSection label={t("common.properties")}>
-          <div className="flex flex-wrap gap-1.5">
-            {propertyBadges.map(({ icon: Icon, labelKey }) => (
-              <span key={labelKey} className={PROPERTY_BADGE_CLASSES}>
-                <Icon className="w-3.5 h-3.5" />
-                {t(labelKey)}
-              </span>
-            ))}
-          </div>
-        </SidebarSection>
-      )}
-
-      {memo.tags.length > 0 && (
-        <SidebarSection label={t("common.tags")} count={memo.tags.length}>
-          <div className="flex flex-wrap gap-1.5">
-            {memo.tags.map((tag) => (
-              <span key={tag} className={TAG_BADGE_CLASSES}>
-                <HashIcon className="w-3 h-3 opacity-50" />
-                {tag}
-              </span>
-            ))}
-          </div>
-        </SidebarSection>
+      {!forceReadonly && referenced.length > 0 && (
+        <Section label={t("common.referenced-by")}>
+          {referenced.map((relation) => {
+            const relatedMemo = getRelationMemo(relation, "referenced");
+            return <BacklinkRow key={`referenced-${relatedMemo?.name}`} relation={relation} snippet={backlinkSnippet(relation)} />;
+          })}
+        </Section>
       )}
 
       {sharePanelOpen && <MemoSharePanel memoName={memo.name} open={sharePanelOpen} onClose={() => setSharePanelOpen(false)} />}
-    </aside>
+    </div>
   );
 };
 

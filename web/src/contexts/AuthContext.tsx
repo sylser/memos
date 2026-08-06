@@ -4,13 +4,23 @@ import { clearAccessToken, getAccessToken } from "@/auth-state";
 import { authServiceClient, refreshAccessToken, shortcutServiceClient, userServiceClient } from "@/connect";
 import { userKeys } from "@/hooks/useUserQueries";
 import type { Shortcut } from "@/types/proto/api/v1/shortcut_service_pb";
-import type { User, UserSetting_GeneralSetting, UserSetting_WebhooksSetting } from "@/types/proto/api/v1/user_service_pb";
+import type {
+  User,
+  UserSetting_GeneralSetting,
+  UserSetting_TagsSetting,
+  UserSetting_WebhooksSetting,
+} from "@/types/proto/api/v1/user_service_pb";
 
 interface AuthState {
   currentUser: User | undefined;
   userGeneralSetting: UserSetting_GeneralSetting | undefined;
   userWebhooksSetting: UserSetting_WebhooksSetting | undefined;
+  userTagsSetting: UserSetting_TagsSetting | undefined;
   shortcuts: Shortcut[];
+  /** Authentication identity has settled, while user settings may still be loading. */
+  isIdentityInitialized: boolean;
+  /** User settings that affect memo presentation are safe to consume. */
+  isUserSettingsInitialized: boolean;
   isInitialized: boolean;
   isLoading: boolean;
 }
@@ -19,9 +29,23 @@ interface AuthContextValue extends AuthState {
   initialize: () => Promise<void>;
   logout: () => Promise<void>;
   refetchSettings: () => Promise<void>;
+  setCurrentUser: (user: User | undefined) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+/** Settled auth state for a request with no valid session (init finished, not loading). */
+const UNAUTHENTICATED_STATE: AuthState = {
+  currentUser: undefined,
+  userGeneralSetting: undefined,
+  userWebhooksSetting: undefined,
+  userTagsSetting: undefined,
+  shortcuts: [],
+  isIdentityInitialized: true,
+  isUserSettingsInitialized: true,
+  isInitialized: true,
+  isLoading: false,
+};
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
@@ -29,29 +53,56 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     currentUser: undefined,
     userGeneralSetting: undefined,
     userWebhooksSetting: undefined,
+    userTagsSetting: undefined,
     shortcuts: [],
+    isIdentityInitialized: false,
+    isUserSettingsInitialized: false,
     isInitialized: false,
     isLoading: true,
   });
 
   const fetchUserSettings = useCallback(async (userName: string) => {
-    const [{ settings }, { shortcuts }] = await Promise.all([
-      userServiceClient.listUserSettings({ parent: userName }),
+    const userSettingsPromise = userServiceClient.listUserSettings({ parent: userName }).then(({ settings }) => {
+      const generalSetting = settings.find((s) => s.value.case === "generalSetting");
+      const webhooksSetting = settings.find((s) => s.value.case === "webhooksSetting");
+      const tagsSetting = settings.find((s) => s.value.case === "tagsSetting");
+      const userSettings = {
+        userGeneralSetting: generalSetting?.value.case === "generalSetting" ? generalSetting.value.value : undefined,
+        userWebhooksSetting: webhooksSetting?.value.case === "webhooksSetting" ? webhooksSetting.value.value : undefined,
+        userTagsSetting: tagsSetting?.value.case === "tagsSetting" ? tagsSetting.value.value : undefined,
+      };
+
+      // Tag settings control sensitive-content blurring. Publish them as soon
+      // as this request settles instead of waiting for unrelated shortcuts.
+      setState((prev) =>
+        prev.currentUser?.name === userName
+          ? {
+              ...prev,
+              ...userSettings,
+              isUserSettingsInitialized: true,
+            }
+          : prev,
+      );
+
+      return userSettings;
+    });
+
+    const [userSettings, { shortcuts }] = await Promise.all([
+      userSettingsPromise,
       shortcutServiceClient.listShortcuts({ parent: userName }),
     ]);
 
-    const generalSetting = settings.find((s) => s.value.case === "generalSetting");
-    const webhooksSetting = settings.find((s) => s.value.case === "webhooksSetting");
-
     return {
-      userGeneralSetting: generalSetting?.value.case === "generalSetting" ? generalSetting.value.value : undefined,
-      userWebhooksSetting: webhooksSetting?.value.case === "webhooksSetting" ? webhooksSetting.value.value : undefined,
+      ...userSettings,
       shortcuts,
     };
   }, []);
 
   const initialize = useCallback(async () => {
-    setState((prev) => ({ ...prev, isLoading: true }));
+    // `initialize` also runs after sign-in, when the previous unauthenticated
+    // state is already marked initialized. Reset the full-readiness flag so
+    // consumers cannot render with the new identity and stale/default settings.
+    setState((prev) => ({ ...prev, isUserSettingsInitialized: false, isInitialized: false, isLoading: true }));
 
     // Try to get or refresh the access token.
     // This handles PWA isolated storage scenarios (e.g., iOS Safari) where localStorage
@@ -68,14 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // If we still don't have a token after refresh attempt, skip getCurrentUser call
     // to avoid unnecessary network request for unauthenticated users.
     if (!getAccessToken()) {
-      setState({
-        currentUser: undefined,
-        userGeneralSetting: undefined,
-        userWebhooksSetting: undefined,
-        shortcuts: [],
-        isInitialized: true,
-        isLoading: false,
-      });
+      setState(UNAUTHENTICATED_STATE);
       return;
     }
 
@@ -84,40 +128,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!currentUser) {
         clearAccessToken();
-        setState({
-          currentUser: undefined,
-          userGeneralSetting: undefined,
-          userWebhooksSetting: undefined,
-          shortcuts: [],
-          isInitialized: true,
-          isLoading: false,
-        });
+        setState(UNAUTHENTICATED_STATE);
         return;
       }
+
+      // Publish the verified identity immediately so route modules and their
+      // data queries can start while display-sensitive settings are loading.
+      setState((prev) => ({
+        ...prev,
+        currentUser,
+        isIdentityInitialized: true,
+      }));
+
+      queryClient.setQueryData(userKeys.currentUser(), currentUser);
+      queryClient.setQueryData(userKeys.detail(currentUser.name), currentUser);
 
       const settings = await fetchUserSettings(currentUser.name);
 
       setState({
         currentUser,
         ...settings,
+        isIdentityInitialized: true,
+        isUserSettingsInitialized: true,
         isInitialized: true,
         isLoading: false,
       });
-
-      // Pre-populate React Query cache
-      queryClient.setQueryData(userKeys.currentUser(), currentUser);
-      queryClient.setQueryData(userKeys.detail(currentUser.name), currentUser);
     } catch (error) {
       console.error("Failed to initialize auth:", error);
       clearAccessToken();
-      setState({
-        currentUser: undefined,
-        userGeneralSetting: undefined,
-        userWebhooksSetting: undefined,
-        shortcuts: [],
-        isInitialized: true,
-        isLoading: false,
-      });
+      setState(UNAUTHENTICATED_STATE);
     }
   }, [fetchUserSettings, queryClient]);
 
@@ -128,31 +167,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.error("[AuthContext] Failed to sign out:", error);
     } finally {
       clearAccessToken();
-      setState({
-        currentUser: undefined,
-        userGeneralSetting: undefined,
-        userWebhooksSetting: undefined,
-        shortcuts: [],
-        isInitialized: true,
-        isLoading: false,
-      });
+      setState(UNAUTHENTICATED_STATE);
       queryClient.clear();
     }
   }, [queryClient]);
 
   const refetchSettings = useCallback(async () => {
-    // Use functional setState to get current user without including state in dependencies
+    const currentUserName = state.currentUser?.name;
+    if (!currentUserName) {
+      return;
+    }
+
+    const settings = await fetchUserSettings(currentUserName);
     setState((prev) => {
-      if (!prev.currentUser) return prev;
-
-      // Fetch settings asynchronously
-      fetchUserSettings(prev.currentUser.name).then((settings) => {
-        setState((current) => ({ ...current, ...settings }));
-      });
-
-      return prev;
+      if (prev.currentUser?.name !== currentUserName) {
+        return prev;
+      }
+      return { ...prev, ...settings };
     });
-  }, [fetchUserSettings]);
+  }, [fetchUserSettings, state.currentUser?.name]);
+
+  // Sync the updated user to AuthContext and React Query cache after profile changes
+  const setCurrentUser = useCallback(
+    (user: User | undefined) => {
+      const previousUser = queryClient.getQueryData<User>(userKeys.currentUser());
+      setState((prev) => ({ ...prev, currentUser: user }));
+      if (user) {
+        queryClient.setQueryData(userKeys.currentUser(), user);
+        queryClient.setQueryData(userKeys.detail(user.name), user);
+      } else {
+        queryClient.removeQueries({ queryKey: userKeys.currentUser(), exact: true });
+        if (previousUser?.name) {
+          queryClient.removeQueries({ queryKey: userKeys.detail(previousUser.name), exact: true });
+        }
+      }
+    },
+    [queryClient],
+  );
 
   // Memoize context value to prevent unnecessary re-renders of consumers
   const value = useMemo(
@@ -161,8 +212,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       initialize,
       logout,
       refetchSettings,
+      setCurrentUser,
     }),
-    [state, initialize, logout, refetchSettings],
+    [state, initialize, logout, refetchSettings, setCurrentUser],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

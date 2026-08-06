@@ -8,6 +8,7 @@ import { RouterProvider } from "react-router-dom";
 import "./i18n";
 import "./index.css";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { refreshAccessToken } from "@/connect";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import { InstanceProvider, useInstance } from "@/contexts/InstanceContext";
@@ -29,8 +30,8 @@ applyLocaleEarly();
 
 // Inner component that initializes contexts
 function AppInitializer({ children }: { children: React.ReactNode }) {
-  const { isInitialized: authInitialized, initialize: initAuth, currentUser } = useAuth();
-  const { isInitialized: instanceInitialized, initialize: initInstance } = useInstance();
+  const { isIdentityInitialized, initialize: initAuth, currentUser } = useAuth();
+  const { isProfileInitialized, initialize: initInstance } = useInstance();
   const initStartedRef = useRef(false);
 
   // Initialize on mount - run in parallel for better performance
@@ -52,7 +53,10 @@ function AppInitializer({ children }: { children: React.ReactNode }) {
   // Live refresh: listen for memo changes via SSE and invalidate caches.
   useLiveMemoRefresh();
 
-  if (!authInitialized || !instanceInitialized) {
+  // Route loading and feed requests only need the verified identity and the
+  // instance profile. Display-sensitive settings continue in the background;
+  // PagedMemoList keeps memo content hidden until privacy settings have settled.
+  if (!isIdentityInitialized || !isProfileInitialized) {
     return null;
   }
 
@@ -65,12 +69,14 @@ function Main() {
       <QueryClientProvider client={queryClient}>
         <InstanceProvider>
           <AuthProvider>
-            <ViewProvider>
-              <AppInitializer>
-                <RouterProvider router={router} />
-                <Toaster position="top-right" />
-              </AppInitializer>
-            </ViewProvider>
+            <TooltipProvider>
+              <ViewProvider>
+                <AppInitializer>
+                  <RouterProvider router={router} />
+                  <Toaster position="top-right" />
+                </AppInitializer>
+              </ViewProvider>
+            </TooltipProvider>
           </AuthProvider>
         </InstanceProvider>
         <ReactQueryDevtools initialIsOpen={false} />

@@ -7,17 +7,21 @@ import (
 	"connectrpc.com/connect"
 	"github.com/grpc-ecosystem/grpc-gateway/v2/runtime"
 	"github.com/labstack/echo/v5"
-	"github.com/labstack/echo/v5/middleware"
+	"github.com/pkg/errors"
 	"golang.org/x/sync/semaphore"
 
 	"github.com/usememos/memos/internal/markdown"
 	"github.com/usememos/memos/internal/profile"
 	v1pb "github.com/usememos/memos/proto/gen/api/v1"
 	"github.com/usememos/memos/server/auth"
+	"github.com/usememos/memos/server/notification"
 	"github.com/usememos/memos/store"
 )
 
-const maxAPIRequestBytes = 256 << 20
+// MaxAPIRequestBytes caps the size of a request body accepted by the API. The
+// in-process MCP endpoint forwards every tool call through these same routes, so
+// it derives its own limit from this constant to keep the two gates in lockstep.
+const MaxAPIRequestBytes = 256 << 20
 
 type APIV1Service struct {
 	v1pb.UnimplementedInstanceServiceServer
@@ -29,15 +33,19 @@ type APIV1Service struct {
 	v1pb.UnimplementedShortcutServiceServer
 	v1pb.UnimplementedIdentityProviderServiceServer
 
-	Secret          string
-	Profile         *profile.Profile
-	Store           *store.Store
-	MarkdownService markdown.Service
-	SSEHub          *SSEHub
+	Secret                  string
+	Profile                 *profile.Profile
+	Store                   *store.Store
+	MarkdownService         markdown.Service
+	SSEHub                  *SSEHub
+	NotificationEmailSender notification.EmailSender
 
 	// thumbnailSemaphore limits concurrent thumbnail generation to prevent memory exhaustion
 	thumbnailSemaphore       *semaphore.Weighted
 	imageProcessingSemaphore *semaphore.Weighted
+
+	// instanceStatsCache memoizes GetInstanceStats results for instanceStatsCacheTTL.
+	instanceStatsCache instanceStatsCache
 }
 
 func NewAPIV1Service(secret string, profile *profile.Profile, store *store.Store) *APIV1Service {
@@ -51,6 +59,7 @@ func NewAPIV1Service(secret string, profile *profile.Profile, store *store.Store
 		Store:                    store,
 		MarkdownService:          markdownService,
 		SSEHub:                   NewSSEHub(),
+		NotificationEmailSender:  nil,
 		thumbnailSemaphore:       semaphore.NewWeighted(3), // Limit to 3 concurrent thumbnail generations
 		imageProcessingSemaphore: semaphore.NewWeighted(2),
 	}
@@ -58,32 +67,39 @@ func NewAPIV1Service(secret string, profile *profile.Profile, store *store.Store
 
 // RegisterGateway registers the gRPC-Gateway and Connect handlers with the given Echo instance.
 func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Echo) error {
-	// Auth middleware for gRPC-Gateway - runs after routing, has access to method name.
-	// Uses the same PublicMethods config as the Connect AuthInterceptor.
-	authenticator := auth.NewAuthenticator(s.Store, s.Secret)
+	// Shared authorizer: one source of truth for authentication and anonymous-access
+	// policy, used by both the gRPC-Gateway middleware and the Connect interceptor.
+	authorizer := NewAuthorizer(s.Store, s.Secret, s.Profile)
+
+	// grpc-gateway does not hand the matched procedure to middleware:
+	// runtime.RPCMethod is only populated by the generated handler, which runs
+	// after middleware. Resolve the procedure from the proto HTTP bindings
+	// instead so the policy check actually runs on this transport.
+	routeResolver, err := newGatewayRouteResolver()
+	if err != nil {
+		return errors.Wrap(err, "failed to build gateway route resolver")
+	}
+
 	gatewayAuthMiddleware := func(next runtime.HandlerFunc) runtime.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request, pathParams map[string]string) {
 			ctx := r.Context()
 
-			// Get the RPC method name from context (set by grpc-gateway after routing)
-			rpcMethod, ok := runtime.RPCMethod(ctx)
-
-			// Extract credentials from HTTP headers
 			authHeader := r.Header.Get("Authorization")
+			result := authorizer.Authenticate(ctx, authHeader)
 
-			result := authenticator.Authenticate(ctx, authHeader)
-
-			// Enforce authentication for non-public methods
-			// If rpcMethod cannot be determined, allow through, service layer will handle visibility checks
-			if result == nil && ok && !IsPublicMethod(rpcMethod) {
+			// An unresolved path yields an empty procedure, which CheckAccess
+			// treats as protected: authenticated callers pass and anonymous ones
+			// are refused. Failing closed keeps a routing gap from becoming an
+			// access-control gap.
+			procedure, _ := routeResolver.resolveRequest(r)
+			if err := authorizer.CheckAccess(ctx, procedure, result); err != nil {
 				http.Error(w, `{"code": 16, "message": "authentication required"}`, http.StatusUnauthorized)
 				return
 			}
 
-			// Apply auth result to context (no-op when result is nil for public endpoints)
+			// Apply the identity to the context (no-op for permitted anonymous requests).
 			if result != nil {
-				ctx = auth.ApplyToContext(ctx, result)
-				r = r.WithContext(ctx)
+				r = r.WithContext(auth.ApplyToContext(ctx, result))
 			}
 
 			next(w, r, pathParams)
@@ -119,12 +135,9 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 		return err
 	}
 	gwGroup := echoServer.Group("")
-	gwGroup.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins: []string{"*"},
-	}))
 	// Register SSE endpoint with same CORS as rest of /api/v1.
 	RegisterSSERoutes(gwGroup, s.SSEHub, s.Store, s.Secret)
-	handler := echo.WrapHandler(http.MaxBytesHandler(gwMux, maxAPIRequestBytes))
+	handler := echo.WrapHandler(http.MaxBytesHandler(gwMux, MaxAPIRequestBytes))
 
 	gwGroup.Any("/api/v1/*", handler)
 	gwGroup.Any("/file/*", handler)
@@ -135,23 +148,14 @@ func (s *APIV1Service) RegisterGateway(ctx context.Context, echoServer *echo.Ech
 		NewMetadataInterceptor(), // Convert HTTP headers to gRPC metadata first
 		NewLoggingInterceptor(logStacktraces),
 		NewRecoveryInterceptor(logStacktraces),
-		NewAuthInterceptor(s.Store, s.Secret),
+		NewAuthInterceptor(authorizer),
 	)
 	connectMux := http.NewServeMux()
 	connectHandler := NewConnectServiceHandler(s)
-	connectHandler.RegisterConnectHandlers(connectMux, connectInterceptors, connect.WithReadMaxBytes(maxAPIRequestBytes))
+	connectHandler.RegisterConnectHandlers(connectMux, connectInterceptors, connect.WithReadMaxBytes(MaxAPIRequestBytes))
 
-	// Wrap with CORS for browser access
-	corsHandler := middleware.CORSWithConfig(middleware.CORSConfig{
-		UnsafeAllowOriginFunc: func(_ *echo.Context, origin string) (string, bool, error) {
-			return origin, true, nil
-		},
-		AllowMethods:     []string{http.MethodGet, http.MethodPost, http.MethodOptions},
-		AllowHeaders:     []string{"*"},
-		AllowCredentials: true,
-	})
-	connectGroup := echoServer.Group("", corsHandler)
-	connectGroup.Any("/memos.api.v1.*", echo.WrapHandler(http.MaxBytesHandler(connectMux, maxAPIRequestBytes)))
+	connectGroup := echoServer.Group("")
+	connectGroup.Any("/memos.api.v1.*", echo.WrapHandler(http.MaxBytesHandler(connectMux, MaxAPIRequestBytes)))
 
 	return nil
 }
