@@ -1,3 +1,4 @@
 export { default as LocationPicker } from "./LocationPicker";
-export { createMarkerIcon, defaultMarkerIcon, ThemedTileLayer } from "./map-utils";
-export { useReverseGeocoding, useIPGeocoding } from "./useReverseGeocoding";
+export { convertBrowserPositionToMapPoint, createMarkerIcon, defaultMarkerIcon, ThemedTileLayer, wgs84ToGcj02 } from "./map-utils";
+export type { IPLocationResult } from "./useReverseGeocoding";
+export { useIPGeocoding, useReverseGeocoding } from "./useReverseGeocoding";

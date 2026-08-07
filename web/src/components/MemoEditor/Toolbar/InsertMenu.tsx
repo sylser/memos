@@ -2,8 +2,8 @@ import { uniqBy } from "lodash-es";
 import { CheckIcon, FileIcon, ImageIcon, LinkIcon, LoaderIcon, MapPinIcon, Maximize2Icon, MicIcon, PlusIcon, TypeIcon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { LinkMemoDialog, LocationDialog } from "@/components/MemoMetadata";
-import type { MapPoint } from "@/components/map/types";
 import { useIPGeocoding, useReverseGeocoding } from "@/components/map";
+import type { MapPoint } from "@/components/map/types";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -61,7 +61,7 @@ const InsertMenu = (props: InsertMenuProps) => {
     setPlaceholder,
   } = location;
 
-  const { data: ipLocation } = useIPGeocoding();
+  const { data: ipLocation, isFetching: isIPLocationFetching, refetch: refetchIPLocation } = useIPGeocoding();
 
   const [debouncedPosition, setDebouncedPosition] = useState<MapPoint | undefined>(undefined);
 
@@ -75,12 +75,40 @@ const InsertMenu = (props: InsertMenuProps) => {
 
   const { data: displayName } = useReverseGeocoding(debouncedPosition?.lat, debouncedPosition?.lng);
 
-  // 当 IP 定位数据返回时，设置占位符
+  const applyIPLocation = useCallback(
+    (result = ipLocation) => {
+      const rectangle = result?.rectangle;
+      if (!rectangle || typeof rectangle !== "string" || !rectangle.includes(";")) {
+        return false;
+      }
+      const [leftBottom, rightTop] = rectangle.split(";");
+      const [lng1, lat1] = leftBottom.split(",").map(Number);
+      const [lng2, lat2] = rightTop.split(",").map(Number);
+      if (![lng1, lat1, lng2, lat2].every((value) => Number.isFinite(value))) {
+        return false;
+      }
+      handleLocationPositionChange({ lat: (lat1 + lat2) / 2, lng: (lng1 + lng2) / 2 });
+      if (result?.address) {
+        setPlaceholder(result.address);
+      }
+      return true;
+    },
+    [handleLocationPositionChange, ipLocation, setPlaceholder],
+  );
+
+  // Seed placeholder/map from IP before the user picks a point or reverse-geocode returns.
   useEffect(() => {
-    if (ipLocation?.address) {
+    if (initialLocation || locationInitialized || locationState.position || !ipLocation) {
+      return;
+    }
+    if (locationDialogOpen) {
+      applyIPLocation(ipLocation);
+      return;
+    }
+    if (ipLocation.address) {
       setPlaceholder(ipLocation.address);
     }
-  }, [ipLocation, setPlaceholder]);
+  }, [applyIPLocation, initialLocation, ipLocation, locationDialogOpen, locationInitialized, locationState.position, setPlaceholder]);
 
   useEffect(() => {
     if (displayName) {
@@ -94,33 +122,26 @@ const InsertMenu = (props: InsertMenuProps) => {
     setLinkDialogOpen(true);
   }, []);
 
-  const handleLocationClick = useCallback(() => {
+  const handleLocationClick = useCallback(async () => {
     setLocationDialogOpen(true);
-    if (!initialLocation && !locationInitialized) {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          (position) => {
-            handleLocationPositionChange({ lat: position.coords.latitude, lng: position.coords.longitude });
-          },
-          (error) => {
-            console.error("Geolocation error:", error);
-            if (ipLocation?.rectangle) {
-              const [leftBottom, rightTop] = ipLocation.rectangle.split(";");
-              const [lng1, lat1] = leftBottom.split(",").map(Number);
-              const [lng2, lat2] = rightTop.split(",").map(Number);
-              handleLocationPositionChange({ lat: (lat1 + lat2) / 2, lng: (lng1 + lng2) / 2 });
-            }
-          },
-        );
-      } else if (ipLocation?.rectangle) {
-        const [leftBottom, rightTop] = ipLocation.rectangle.split(";");
-        const [lng1, lat1] = leftBottom.split(",").map(Number);
-        const [lng2, lat2] = rightTop.split(",").map(Number);
-        handleLocationPositionChange({ lat: (lat1 + lat2) / 2, lng: (lng1 + lng2) / 2 });
-      }
+    if (initialLocation || locationInitialized || locationState.position) {
+      return;
+    }
+
+    // Flow: public IP -> Amap IP location -> map center from rectangle.
+    if (applyIPLocation(ipLocation)) {
+      return;
+    }
+
+    if (!isIPLocationFetching) {
+      try {
+        const refreshed = await refetchIPLocation();
+        applyIPLocation(refreshed.data);
+      } catch (error) {
+        console.error("IP location failed:", error);
       }
     }
-  }, [initialLocation, locationInitialized, handleLocationPositionChange, ipLocation]);
+  }, [applyIPLocation, initialLocation, ipLocation, isIPLocationFetching, locationInitialized, locationState.position, refetchIPLocation]);
 
   const handleLocationConfirm = useCallback(() => {
     const newLocation = getLocation();

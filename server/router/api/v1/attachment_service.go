@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -129,6 +130,20 @@ func (s *APIV1Service) CreateAttachment(ctx context.Context, request *v1pb.Creat
 	create.Size = int64(size)
 	create.Blob = request.Attachment.Content
 
+	if strings.HasPrefix(create.Type, "video/") {
+		if transcodedBlob, transcoded, transcodeErr := transcodeVideoToH264MP4(create.Blob); transcodeErr != nil {
+			slog.Warn("failed to transcode uploaded video",
+				slog.String("filename", create.Filename),
+				slog.String("type", create.Type),
+				slog.String("error", transcodeErr.Error()))
+		} else if transcoded {
+			create.Blob = transcodedBlob
+			create.Size = int64(len(transcodedBlob))
+			create.Type = "video/mp4"
+			create.Filename = forceMP4Filename(create.Filename)
+		}
+
+	}
 	if request.Attachment.Memo != nil {
 		memoUID, err := ExtractMemoUIDFromName(*request.Attachment.Memo)
 		if err != nil {
@@ -145,20 +160,6 @@ func (s *APIV1Service) CreateAttachment(ctx context.Context, request *v1pb.Creat
 			return nil, status.Errorf(codes.PermissionDenied, "permission denied")
 		}
 		create.MemoID = &memo.ID
-	}
-
-	if strings.HasPrefix(create.Type, "video/") {
-		if transcodedBlob, transcoded, transcodeErr := transcodeVideoToH264MP4(create.Blob); transcodeErr != nil {
-			slog.Warn("failed to transcode uploaded video",
-				slog.String("filename", create.Filename),
-				slog.String("type", create.Type),
-				slog.String("error", transcodeErr.Error()))
-		} else if transcoded {
-			create.Blob = transcodedBlob
-			create.Size = int64(len(transcodedBlob))
-			create.Type = "video/mp4"
-			create.Filename = forceMP4Filename(create.Filename)
-		}
 	}
 
 	if create.Payload == nil || create.Payload.MotionMedia == nil {

@@ -1,27 +1,105 @@
 import { useQuery } from "@tanstack/react-query";
 
+const AMAP_KEY = "ae55a1e821323f4238ab0a7dfca5d6a2";
+
 const AMAP_GEOCODING = {
   endpoint: "https://restapi.amap.com/v3/geocode/regeo",
-  key: "ae55a1e821323f4238ab0a7dfca5d6a2",
-  extensions: "all",
-  language: "zh",
+  key: AMAP_KEY,
+  extensions: "base",
+  language: "zh_cn",
 } as const;
 
 const AMAP_IP_LOCATION = {
   endpoint: "https://restapi.amap.com/v3/ip",
-  key: "ae55a1e821323f4238ab0a7dfca5d6a2",
+  key: AMAP_KEY,
 } as const;
+
+export interface IPLocationResult {
+  address: string;
+  province: string;
+  city: string;
+  adcode: string;
+  rectangle: string;
+  ip: string;
+}
+
+const emptyIPLocation = (): IPLocationResult => ({
+  address: "",
+  province: "",
+  city: "",
+  adcode: "",
+  rectangle: "",
+  ip: "",
+});
+
+const formatAmapLocation = (lng: number, lat: number) => `${lng.toFixed(6)},${lat.toFixed(6)}`;
+
+async function fetchPublicIP(): Promise<string | undefined> {
+  try {
+    const response = await fetch("https://ipinfo.io/ip");
+    if (!response.ok) {
+      return undefined;
+    }
+    const text = (await response.text()).trim();
+    return text.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/)?.[1];
+  } catch {
+    return undefined;
+  }
+}
+
+async function fetchAmapIPLocation(ip?: string): Promise<IPLocationResult> {
+  const url = ip
+    ? `${AMAP_IP_LOCATION.endpoint}?key=${AMAP_IP_LOCATION.key}&ip=${encodeURIComponent(ip)}`
+    : `${AMAP_IP_LOCATION.endpoint}?key=${AMAP_IP_LOCATION.key}`;
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`高德IP定位失败: ${response.status}`);
+  }
+
+  const data = await response.json();
+  if (data.status !== "1") {
+    throw new Error(data.info || "高德返回错误");
+  }
+
+  // Amap may return empty arrays for unknown fields.
+  const province = typeof data.province === "string" ? data.province : "";
+  const city = typeof data.city === "string" ? data.city : "";
+  const adcode = typeof data.adcode === "string" ? data.adcode : "";
+  const rectangle = typeof data.rectangle === "string" ? data.rectangle : "";
+  const address = `${province}${city}`.trim();
+
+  if (!address && !rectangle) {
+    throw new Error("高德IP定位无有效结果");
+  }
+
+  return {
+    address: address || "当前位置",
+    province,
+    city,
+    adcode,
+    rectangle,
+    ip: ip || "",
+  };
+}
 
 export const useReverseGeocoding = (lat: number | undefined, lng: number | undefined) => {
   return useQuery({
     queryKey: ["amap-geocoding", lat, lng],
     queryFn: async () => {
-      const coordString = `${lng?.toFixed(6)}, ${lat?.toFixed(6)}`; // 高德是 lng,lat 顺序
-      if (lat === undefined || lng === undefined) return coordString;
+      if (lat === undefined || lng === undefined) {
+        return undefined;
+      }
+
+      const location = formatAmapLocation(lng, lat);
 
       try {
-        const url = `${AMAP_GEOCODING.endpoint}?key=${AMAP_GEOCODING.key}&location=${coordString}&extensions=${AMAP_GEOCODING.extensions}&language=${AMAP_GEOCODING.language}`;
-
+        const url = `${AMAP_GEOCODING.endpoint}?key=${AMAP_GEOCODING.key}&location=${encodeURIComponent(location)}&extensions=${AMAP_GEOCODING.extensions}&language=${AMAP_GEOCODING.language}`;
         const response = await fetch(url, {
           headers: {
             Accept: "application/json",
@@ -33,95 +111,43 @@ export const useReverseGeocoding = (lat: number | undefined, lng: number | undef
         }
 
         const data = await response.json();
-
         if (data.status !== "1") {
           throw new Error(data.info || "高德返回错误");
         }
 
-        // 优先返回 formatted_address（完整地址）
-        // 如果没有，就返回 addressComponent 的拼接
-        const result = data.regeocode?.formatted_address ||
-            `${data.regeocode?.addressComponent?.province || ""}${
-                data.regeocode?.addressComponent?.city || ""
-            }${data.regeocode?.addressComponent?.district || ""}${
-                data.regeocode?.addressComponent?.street || ""
-            }${data.regeocode?.addressComponent?.number || ""}`.trim() ||
-            coordString;
-
-        return result;
+        const component = data.regeocode?.addressComponent;
+        const composed =
+          `${component?.province || ""}${component?.city || ""}${component?.district || ""}${component?.township || ""}${component?.streetNumber?.street || ""}${component?.streetNumber?.number || ""}`.trim();
+        const result = data.regeocode?.formatted_address || composed || location;
+        return typeof result === "string" && result.length > 0 ? result : location;
       } catch (error) {
         console.error("高德逆地理编码失败:", error);
-        return coordString; // 失败时 fallback 到坐标字符串
+        return location;
       }
     },
     enabled: lat !== undefined && lng !== undefined,
-    staleTime: Infinity, // 永久缓存（坐标不变就不重新请求）
+    staleTime: Infinity,
   });
 };
+
 export const useIPGeocoding = (ip?: string) => {
   return useQuery({
-    queryKey: ["amap-ip-location", ip],
-    queryFn: async () => {
+    queryKey: ["amap-ip-location", ip ?? "auto"],
+    queryFn: async (): Promise<IPLocationResult> => {
       try {
-        let finalIP = ip;
-
-        // ✅ 如果没传 ip，就先获取公网 IP
-        if (!finalIP) {
-          const ipRes = await fetch("https://myip.ipip.net/");
-          if (!ipRes.ok) {
-            throw new Error("获取IP失败");
-          }
-          const ipText = await ipRes.text();
-          // ipip.net 返回格式为 "当前 IP：xxx.xxx.xxx.xxx 来自于：..."
-          const ipMatch = ipText.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
-          if (!ipMatch) {
-            throw new Error("无法从响应中解析出IP地址");
-          }
-          finalIP = ipMatch[1];
+        // Required order: public IP first, then Amap /v3/ip with that IP.
+        const finalIP = ip || (await fetchPublicIP());
+        if (finalIP) {
+          return await fetchAmapIPLocation(finalIP);
         }
 
-        // ✅ 调用高德接口
-        const url = finalIP
-            ? `${AMAP_IP_LOCATION.endpoint}?key=${AMAP_IP_LOCATION.key}&ip=${finalIP}`
-            : `${AMAP_IP_LOCATION.endpoint}?key=${AMAP_IP_LOCATION.key}`;
-
-        const response = await fetch(url, {
-          headers: {
-            Accept: "application/json",
-          },
-        });
-
-        if (!response.ok) {
-          throw new Error(`高德IP定位失败: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        if (data.status !== "1") {
-          throw new Error(data.info || "高德返回错误");
-        }
-
-        const result =
-            `${data.province || ""}${data.city || ""}`.trim() || "未知位置";
-
-        return {
-          address: result,
-          province: data.province,
-          city: data.city,
-          adcode: data.adcode,
-          rectangle: data.rectangle,
-          ip: finalIP, // ✅ 顺手把 IP 也返回
-        };
+        // Fallback only when public-IP providers fail.
+        console.warn("获取公网IP失败，尝试高德匿名IP定位");
+        return await fetchAmapIPLocation();
       } catch (error) {
         console.error("高德IP定位失败:", error);
-        return {
-          address: "定位失败",
-          province: "",
-          city: "",
-          adcode: "",
-          rectangle: "",
-          ip: "",
-        };
+        // Return empty result (not "定位失败") so UI can keep placeholder blank.
+        return emptyIPLocation();
       }
     },
     staleTime: 24 * 60 * 60 * 1000,

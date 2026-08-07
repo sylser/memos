@@ -1,4 +1,4 @@
-import { DownloadIcon, FileIcon, PaperclipIcon } from "lucide-react";
+import { DownloadIcon, FileIcon, PaperclipIcon, PlayIcon } from "lucide-react";
 import type { PropsWithChildren } from "react";
 import { useMemo } from "react";
 import MetadataSection from "@/components/MemoMetadata/MetadataSection";
@@ -12,6 +12,7 @@ import { buildAttachmentVisualItems } from "@/utils/media-item";
 import AudioAttachmentItem from "./AudioAttachmentItem";
 import { getAttachmentMetadata, isAudioAttachment, separateAttachments } from "./attachmentHelpers";
 import {
+  COLLAGE_VIDEO_PLAY_BADGE_CLASS,
   COVER_MEDIA_CLASS,
   MEDIA_HOVER_GRADIENT_CLASS,
   MEDIA_HOVER_SURFACE_CLASS,
@@ -87,6 +88,17 @@ const VisualTile = ({
   );
 };
 
+const VideoPlayBadge = ({ className, children }: PropsWithChildren<{ className?: string }>) => (
+  <span
+    className={cn(
+      "pointer-events-none absolute inline-flex items-center justify-center rounded-full bg-background/85 text-foreground shadow-sm backdrop-blur-sm",
+      className,
+    )}
+  >
+    {children}
+  </span>
+);
+
 const CollageVisualItem = ({
   item,
   onPreview,
@@ -99,13 +111,6 @@ const CollageVisualItem = ({
   overlayLabel?: string;
 }) => {
   const motionPreviewProps = item.kind === "motion" ? getMotionPreviewProps(item) : undefined;
-  if (item.kind === "video") {
-    return (
-      <div className={cn("block h-full w-full overflow-hidden rounded-xl bg-black/5", className)}>
-        <VideoJSPlayer src={item.sourceUrl} className="h-full w-full" videoClassName={COVER_MEDIA_CLASS} controls />
-      </div>
-    );
-  }
 
   return (
     <VisualTile className={cn("block h-full w-full", className)} onPreview={onPreview} overlayLabel={overlayLabel}>
@@ -164,7 +169,7 @@ const SingleVisualItem = ({ item, onPreview }: { item: VisualItem; onPreview?: (
   }
 
   return (
-    <div className={cn("block overflow-hidden rounded-xl", SINGLE_VIDEO_CARD_WIDTH_CLASS)}>
+    <VisualTile className={cn("block", SINGLE_VIDEO_CARD_WIDTH_CLASS)} onPreview={onPreview}>
       <div className="relative aspect-video bg-black/5">
         <VideoPoster sourceUrl={item.sourceUrl} posterUrl={item.posterUrl} alt={item.filename} className={COVER_MEDIA_CLASS} />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/35 via-black/5 to-transparent" />
@@ -172,7 +177,7 @@ const SingleVisualItem = ({ item, onPreview }: { item: VisualItem; onPreview?: (
           <PlayIcon className="h-4 w-4 fill-current" />
         </VideoPlayBadge>
       </div>
-    </div>
+    </VisualTile>
   );
 };
 

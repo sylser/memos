@@ -2,15 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import PreviewImageDialog from "@/components/PreviewImageDialog";
 
-vi.mock("@/hooks/useMediaQuery", () => ({
-  __esModule: true,
-  default: () => false,
-}));
-
 describe("<PreviewImageDialog>", () => {
-  it("provides a dialog description without accessibility warnings", async () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+  it("renders nothing when there are no preview items", () => {
+    const { container } = render(<PreviewImageDialog open onOpenChange={vi.fn()} items={[]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
 
+  it("opens photo slider for image previews", async () => {
     render(
       <PreviewImageDialog
         open
@@ -20,8 +18,10 @@ describe("<PreviewImageDialog>", () => {
     );
 
     await waitFor(() => {
-      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("Missing `Description`"));
+      expect(document.querySelector('img[src="/image.jpg"]')).toBeTruthy();
     });
+    expect(screen.getByText("image.jpg")).toBeInTheDocument();
+    expect(document.querySelector(".PhotoView-Portal")).toBeTruthy();
   });
 
   it("keeps hook order stable when preview items appear after an empty render", () => {
@@ -37,56 +37,10 @@ describe("<PreviewImageDialog>", () => {
       );
     }).not.toThrow();
 
-    expect(screen.getByAltText("Preview image 1 of 1")).toBeInTheDocument();
+    expect(document.querySelector('img[src="/image.jpg"]')).toBeTruthy();
   });
 
-  it("shows zoom controls for image previews", () => {
-    render(
-      <PreviewImageDialog
-        open
-        onOpenChange={vi.fn()}
-        items={[{ id: "image-1", kind: "image", sourceUrl: "/image.jpg", posterUrl: "/image.jpg", filename: "image.jpg" }]}
-      />,
-    );
-
-    expect(screen.getByRole("button", { name: /zoom in/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /zoom out/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /reset zoom/i })).toBeInTheDocument();
-    expect(screen.getByText("100%")).toBeInTheDocument();
-  });
-
-  it("toggles image zoom on double click", () => {
-    render(
-      <PreviewImageDialog
-        open
-        onOpenChange={vi.fn()}
-        items={[{ id: "image-1", kind: "image", sourceUrl: "/image.jpg", posterUrl: "/image.jpg", filename: "image.jpg" }]}
-      />,
-    );
-
-    const image = screen.getByAltText("Preview image 1 of 1");
-
-    fireEvent.doubleClick(image);
-
-    expect(image).toHaveStyle({ transform: "translate3d(0px, 0px, 0) scale(2)" });
-    expect(screen.getByText("200%")).toBeInTheDocument();
-  });
-
-  it("zooms image previews with the wheel", () => {
-    render(
-      <PreviewImageDialog
-        open
-        onOpenChange={vi.fn()}
-        items={[{ id: "image-1", kind: "image", sourceUrl: "/image.jpg", posterUrl: "/image.jpg", filename: "image.jpg" }]}
-      />,
-    );
-
-    fireEvent.wheel(screen.getByTestId("preview-zoom-surface"), { deltaY: -100 });
-
-    expect(screen.getByText("120%")).toBeInTheDocument();
-  });
-
-  it("does not show zoom controls for video previews", () => {
+  it("renders video previews with controls", async () => {
     render(
       <PreviewImageDialog
         open
@@ -95,12 +49,15 @@ describe("<PreviewImageDialog>", () => {
       />,
     );
 
-    expect(screen.queryByRole("button", { name: /zoom in/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /zoom out/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /reset zoom/i })).not.toBeInTheDocument();
+    await waitFor(() => {
+      const video = document.querySelector("video");
+      expect(video).toBeTruthy();
+      expect(video?.getAttribute("src")).toBe("/video.mp4");
+      expect(video?.hasAttribute("controls")).toBe(true);
+    });
   });
 
-  it("keeps previous and next controls available for mobile image galleries", () => {
+  it("shows gallery index for multiple images", async () => {
     render(
       <PreviewImageDialog
         open
@@ -112,7 +69,26 @@ describe("<PreviewImageDialog>", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /previous item/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /next item/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(document.querySelector(".PhotoView-Slider__Counter")).toHaveTextContent("1 / 2");
+    });
+  });
+
+  it("notifies parent when closed", async () => {
+    const onOpenChange = vi.fn();
+    render(
+      <PreviewImageDialog
+        open
+        onOpenChange={onOpenChange}
+        items={[{ id: "image-1", kind: "image", sourceUrl: "/image.jpg", posterUrl: "/image.jpg", filename: "image.jpg" }]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector(".PhotoView-Slider__toolbarIcon")).toBeTruthy();
+    });
+
+    fireEvent.click(document.querySelector(".PhotoView-Slider__toolbarIcon")!);
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });
